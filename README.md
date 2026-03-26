@@ -1,5 +1,6 @@
 hai this is my vibe coded sigma visual fme
 
+https://discord.gg/XstBXztKsJ
 
 commands:
 
