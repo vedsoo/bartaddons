@@ -50,7 +50,6 @@ public final class HatClientMod implements ClientModInitializer {
     private static KeyBinding rotateFmeKey;
     private static KeyBinding deleteFmeKey;
     private static KeyBinding copyFmeKey;
-    private static KeyBinding doorGlassKey;
     private static KeyBinding rotateSchematicKey;
     private static boolean middleMouseWasDown;
     private static BlockPos worldEditPos1;
@@ -92,12 +91,6 @@ public final class HatClientMod implements ClientModInitializer {
             "key.hat.fme_copy",
             InputUtil.Type.KEYSYM,
             GLFW.GLFW_KEY_C,
-            BART_ADDONS_CATEGORY
-        ));
-        doorGlassKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "key.hat.door_glass",
-            InputUtil.Type.KEYSYM,
-            GLFW.GLFW_KEY_M,
             BART_ADDONS_CATEGORY
         ));
         rotateSchematicKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
@@ -176,7 +169,6 @@ public final class HatClientMod implements ClientModInitializer {
 
     private static void handleKeys(MinecraftClient client) {
         FmeManager.clientTick(client);
-        DungeonDoorGlassManager.onClientTick(client);
 
         while (rotateFmeKey.wasPressed()) {
             if (!FmeManager.isEnabled() || !FmeManager.isEditMode() || client.player == null) {
@@ -278,9 +270,6 @@ public final class HatClientMod implements ClientModInitializer {
 
         while (openGuiKey.wasPressed()) {
             client.setScreen(new HatToggleScreen());
-        }
-        while (doorGlassKey.wasPressed()) {
-            DungeonDoorGlassManager.toggle(client);
         }
     }
 
