@@ -40,7 +40,7 @@ WorldEdit 13. /fme worldedit pos1
 
 18. /fme worldedit pos3 <x> <y> <z>
 
-19. /fme worldedit clear
+19. /fme worldedit clear / turns box in barrier
 
 20. /fme worldedit list
 
