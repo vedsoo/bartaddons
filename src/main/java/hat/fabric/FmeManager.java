@@ -56,11 +56,11 @@ public final class FmeManager {
     private static int selectedRotation = 0;
     private static int openScreenInTicks = -1;
     private static ScreenMode openScreenMode = ScreenMode.DEFAULT;
-    private static int guiPanelColor = 0xD0141414;
-    private static int guiBorderColor = 0xFF00FFFF;
-    private static int guiTextColor = 0xFFFFFFFF;
-    private static int guiAccentTextColor = 0xFF7FFFD4;
-    private static int selectionBoxColor = 0x6600FFFF;
+    private static int guiPanelColor = 0xE0161216;
+    private static int guiBorderColor = 0x003A2A2F;
+    private static int guiTextColor = 0xFFF5E9E1;
+    private static int guiAccentTextColor = 0xFFF28C3A;
+    private static int selectionBoxColor = 0x552E1C20;
     private static float guiScale = 1.5f;
     private static float guiBlockBrightness = 2.0f;
     private static boolean autoSaveEnabled = true;
@@ -807,14 +807,7 @@ public final class FmeManager {
         if (root.has("selectionBoxColor")) {
             selectionBoxColor = root.get("selectionBoxColor").getAsInt();
         }
-        if (root.has("guiScale")) {
-            try {
-                float value = (float) root.get("guiScale").getAsDouble();
-                guiScale = MathHelper.clamp(value, 0.75f, 3.0f);
-            } catch (Exception ignored) {
-                guiScale = 1.5f;
-            }
-        }
+        guiScale = 1.5f;
         if (root.has("blockBrightness")) {
             try {
                 float value = (float) root.get("blockBrightness").getAsDouble();
@@ -1099,7 +1092,6 @@ public final class FmeManager {
         root.addProperty("guiTextColor", guiTextColor);
         root.addProperty("guiAccentTextColor", guiAccentTextColor);
         root.addProperty("selectionBoxColor", selectionBoxColor);
-        root.addProperty("guiScale", guiScale);
         root.addProperty("blockBrightness", guiBlockBrightness);
         root.addProperty("offsetX", offsetX);
         root.addProperty("offsetY", offsetY);
@@ -1165,11 +1157,11 @@ public final class FmeManager {
             selectedSourceType = SelectedSourceType.BLOCK;
             selectedCustomTexture = null;
             selectedRotation = 0;
-            guiPanelColor = 0xD0141414;
-            guiBorderColor = 0xFF00FFFF;
-            guiTextColor = 0xFFFFFFFF;
-            guiAccentTextColor = 0xFF7FFFD4;
-            selectionBoxColor = 0x6600FFFF;
+            guiPanelColor = 0xE0161216;
+            guiBorderColor = 0x003A2A2F;
+            guiTextColor = 0xFFF5E9E1;
+            guiAccentTextColor = 0xFFF28C3A;
+            selectionBoxColor = 0x552E1C20;
             guiScale = 1.5f;
             guiBlockBrightness = 2.0f;
             autoSaveEnabled = true;
@@ -1909,21 +1901,24 @@ public final class FmeManager {
     }
 
     public static void resetGuiColors() {
-        guiPanelColor = 0xD0141414;
-        guiBorderColor = 0xFF00FFFF;
-        guiTextColor = 0xFFFFFFFF;
-        guiAccentTextColor = 0xFF7FFFD4;
-        selectionBoxColor = 0x6600FFFF;
+        guiPanelColor = 0xE0161216;
+        guiBorderColor = 0x003A2A2F;
+        guiTextColor = 0xFFF5E9E1;
+        guiAccentTextColor = 0xFFF28C3A;
+        selectionBoxColor = 0x552E1C20;
+        save();
+    }
+
+    public static void saveGuiColors() {
         save();
     }
 
     public static float getGuiScale() {
-        return guiScale;
+        return 1.5f;
     }
 
     public static void setGuiScale(float value) {
-        guiScale = MathHelper.clamp(value, 0.75f, 3.0f);
-        save();
+        guiScale = 1.5f;
     }
 
     public static float getBlockBrightness() {

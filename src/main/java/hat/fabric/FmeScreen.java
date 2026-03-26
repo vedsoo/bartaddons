@@ -4,12 +4,15 @@ import net.minecraft.block.Block;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.narration.NarrationMessageBuilder;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.ClickableWidget;
 import net.minecraft.client.gui.widget.SliderWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.input.CharInput;
+import net.minecraft.client.input.KeyInput;
 import net.minecraft.client.sound.PositionedSoundInstance;
 import net.minecraft.client.sound.SoundManager;
 import net.minecraft.item.ItemStack;
@@ -20,7 +23,9 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.Util;
 import net.minecraft.util.math.MathHelper;
+import org.lwjgl.glfw.GLFW;
 
+import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -81,6 +86,23 @@ public final class FmeScreen extends Screen {
         SETTINGS
     }
 
+    private enum GuiColorTarget {
+        PANEL("Panel", FmeManager::getGuiPanelColor, FmeManager::setGuiPanelColor),
+        TEXT("Text", FmeManager::getGuiTextColor, FmeManager::setGuiTextColor),
+        ACCENT("Accent", FmeManager::getGuiAccentTextColor, FmeManager::setGuiAccentTextColor),
+        SELECT("Select", FmeManager::getSelectionBoxColor, FmeManager::setSelectionBoxColor);
+
+        private final String label;
+        private final IntSupplier getter;
+        private final IntConsumer setter;
+
+        GuiColorTarget(String label, IntSupplier getter, IntConsumer setter) {
+            this.label = label;
+            this.getter = getter;
+            this.setter = setter;
+        }
+    }
+
     private final List<Block> allBlocks = new ArrayList<>();
     private final List<Path> textureFiles = new ArrayList<>();
     private final java.util.Map<Path, Identifier> customTextureCache = new java.util.HashMap<>();
@@ -89,6 +111,8 @@ public final class FmeScreen extends Screen {
     private final List<GuiColorSlider> colorSliders = new ArrayList<>();
     private final List<TabButton> tabButtons = new ArrayList<>();
     private final List<ButtonWidget> settingsTabButtons = new ArrayList<>();
+    private GuiColorPicker colorPicker;
+    private GuiColorTarget colorPickerTarget = GuiColorTarget.PANEL;
     private Tab tab = Tab.ALL;
     private final float[] tabAnim = new float[Tab.values().length];
     private int page = 0;
@@ -123,6 +147,26 @@ public final class FmeScreen extends Screen {
     private long editButtonAnimUntilMs;
     private ButtonWidget fmeToggleButton;
     private ButtonWidget editToggleButton;
+    private final boolean openGuiSettings;
+    private boolean pickerOpen = true;
+    private float pickerAnim = 1f;
+    private float pickerAnimStart = 1f;
+    private float pickerAnimTarget = 1f;
+    private long pickerAnimStartMs = 0L;
+    private static final long PICKER_ANIM_MS = 200L;
+    private int pickerBaseX;
+    private int pickerBaseY;
+    private int pickerWidth;
+    private int pickerHeight;
+    private int pickerHeaderHeight;
+    private int pickerGap;
+    private ButtonWidget pickerTargetButton;
+    private ButtonWidget pickerToggleButton;
+    private int uiPanelColor = UI_PANEL_COLOR;
+    private int uiBorderColor = UI_PANEL_BORDER;
+    private int uiTextColor = UI_TEXT;
+    private int uiMutedColor = UI_TEXT_MUTED;
+    private int uiAccentColor = UI_ACCENT;
 
     public FmeScreen() {
         this(false);
@@ -130,7 +174,8 @@ public final class FmeScreen extends Screen {
 
     public FmeScreen(boolean openGuiSettings) {
         super(Text.literal("FME"));
-        this.tab = Tab.ALL;
+        this.openGuiSettings = openGuiSettings;
+        this.tab = openGuiSettings ? Tab.SETTINGS : Tab.ALL;
     }
 
     @Override
@@ -209,6 +254,7 @@ public final class FmeScreen extends Screen {
         this.setInitialFocus(this.searchField);
 
         buildSettingsTabWidgets(panelX, panelY);
+        buildSettingsWidgets(panelX, panelY);
         initTabAnimation();
         updateTabState();
     }
@@ -216,6 +262,7 @@ public final class FmeScreen extends Screen {
     @Override
     public void tick() {
         updateTabAnimation();
+        updatePickerAnimation();
     }
 
     @Override
@@ -250,14 +297,20 @@ public final class FmeScreen extends Screen {
             mouseX = Math.round((mouseX - centerX) / openScale + centerX);
             mouseY = Math.round((mouseY - centerY) / openScale + centerY);
         }
-        int panelColor = UI_PANEL_COLOR;
-        int borderColor = UI_PANEL_BORDER;
-        int textColor = UI_TEXT;
-        int accentColor = UI_ACCENT;
-        int mutedColor = UI_TEXT_MUTED;
+        uiPanelColor = FmeManager.getGuiPanelColor();
+        uiBorderColor = FmeManager.getGuiBorderColor();
+        uiTextColor = FmeManager.getGuiTextColor();
+        uiAccentColor = FmeManager.getGuiAccentTextColor();
+        int textAlpha = (uiTextColor >> 24) & 0xFF;
+        uiMutedColor = withAlpha(mixColor(uiTextColor, uiPanelColor, 0.55f), textAlpha == 0 ? 0xFF : textAlpha);
+        int panelColor = uiPanelColor;
+        int borderColor = uiBorderColor;
+        int textColor = uiTextColor;
+        int accentColor = uiAccentColor;
+        int mutedColor = uiMutedColor;
         int cellBase = UI_CELL_BG;
-        int cellSelected = UI_CELL_SELECTED;
-        int cellSelectedCustom = UI_CELL_SELECTED_ACCENT;
+        int cellSelected = FmeManager.getSelectionBoxColor();
+        int cellSelectedCustom = withAlpha(mixColor(cellSelected, uiAccentColor, 0.35f), (cellSelected >>> 24) & 0xFF);
         int cellBorder = UI_CELL_BORDER;
         int cellFavoriteBorder = withAlpha(mixColor(cellBorder, textColor, 0.4f), 0xFF);
 
@@ -267,7 +320,7 @@ public final class FmeScreen extends Screen {
         context.drawText(this.textRenderer, Text.literal("Block Selector"), contentX + 12, titleY, textColor, false);
         context.drawText(this.textRenderer, Text.literal(currentBrushLabel()), contentX + 12, subtitleY, mutedColor, false);
         int closeColor = isOverClose(mouseX, mouseY)
-            ? withAlpha(mixColor(textColor, UI_ACCENT, 0.6f), 0xFF)
+            ? withAlpha(mixColor(textColor, uiAccentColor, 0.6f), 0xFF)
             : mutedColor;
         context.drawText(this.textRenderer, Text.literal("x"), closeX + 2, closeY, closeColor, false);
 
@@ -296,8 +349,10 @@ public final class FmeScreen extends Screen {
             List<Path> entries = visibleTextureEntries();
             if (entries.isEmpty()) {
                 context.drawText(this.textRenderer, Text.literal("No custom textures found"), gridX + 6, gridY + 6, mutedColor, false);
-                context.drawText(this.textRenderer, Text.literal("Drop PNGs into: " + HatTextureManager.getTextureDir()),
-                    gridX + 6, gridY + 18, mutedColor, false);
+                String dropLabel = "Drop PNGs into: " + HatTextureManager.getTextureDir();
+                int maxWidth = panelX + panelWidth - (gridX + 6) - 6;
+                String trimmed = this.textRenderer.trimToWidth(dropLabel, Math.max(0, maxWidth));
+                context.drawText(this.textRenderer, Text.literal(trimmed), gridX + 6, gridY + 18, mutedColor, false);
             }
             String selectedName = FmeManager.getSelectedCustomTextureName();
             for (int i = 0; i < ENTRIES_PER_PAGE; i++) {
@@ -468,6 +523,23 @@ public final class FmeScreen extends Screen {
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+    }
+
+    @Override
+    public boolean charTyped(CharInput input) {
+        if (tab == Tab.SETTINGS && colorPicker != null && colorPicker.active && input.isValidChar()
+            && colorPicker.handleCharTyped((char) input.codepoint())) {
+            return true;
+        }
+        return super.charTyped(input);
+    }
+
+    @Override
+    public boolean keyPressed(KeyInput input) {
+        if (tab == Tab.SETTINGS && colorPicker != null && colorPicker.active && colorPicker.handleKeyPressed(input.key())) {
+            return true;
+        }
+        return super.keyPressed(input);
     }
 
     @Override
@@ -656,7 +728,7 @@ public final class FmeScreen extends Screen {
         int textHeight = this.textRenderer.fontHeight;
         int starX = x + Math.max(0, (width - textWidth) / 2);
         int starY = y + Math.max(0, (height - textHeight) / 2);
-        context.drawText(this.textRenderer, Text.literal(star), starX, starY, UI_ACCENT, false);
+        context.drawText(this.textRenderer, Text.literal(star), starX, starY, uiAccentColor, false);
     }
 
     private static void drawRoundedPanel(DrawContext context, int x, int y, int width, int height,
@@ -737,7 +809,7 @@ public final class FmeScreen extends Screen {
         context.fill(x, y, x + boxWidth, y + boxHeight, bg);
         drawCyanBorder(context, x, y, boxWidth, boxHeight, border);
         for (int i = 0; i < lines.length; i++) {
-            int color = i == 0 ? UI_TEXT : UI_TEXT_MUTED;
+            int color = i == 0 ? uiTextColor : uiMutedColor;
             context.drawText(this.textRenderer, Text.literal(lines[i]), x + paddingX, y + paddingY + i * lineHeight, color, false);
         }
     }
@@ -766,42 +838,75 @@ public final class FmeScreen extends Screen {
         settingsWidgets.clear();
         colorSliders.clear();
         float scale = FmeManager.getGuiScale();
-        int baseY = gridY;
-        int sliderWidth = Math.round(160 * scale);
-        int sliderHeight = Math.round(16 * scale);
-        int gap = Math.round(3 * scale);
-        int leftX = contentX + 10;
-        int rightX = contentX + Math.round(190 * scale);
+        pickerGap = Math.round(3 * scale);
+        pickerWidth = Math.round(240 * scale);
+        pickerHeight = Math.round(120 * scale);
+        pickerHeaderHeight = Math.round(18 * scale);
+        pickerBaseY = gridY;
+        int rightEdge = panelX + panelWidth - Math.round(12 * scale);
+        pickerBaseX = rightEdge - pickerWidth;
+        int toggleSize = pickerHeaderHeight;
+        int toggleX = pickerBaseX - toggleSize - pickerGap;
+        pickerToggleButton = new TabStyleButton(toggleX, pickerBaseY, toggleSize, pickerHeaderHeight,
+            Text.literal(pickerOpen ? ">" : "<"), button -> {
+            pickerOpen = !pickerOpen;
+            pickerAnimStart = pickerAnim;
+            pickerAnimTarget = pickerOpen ? 1f : 0f;
+            pickerAnimStartMs = Util.getMeasuringTimeMs();
+            button.setMessage(Text.literal(pickerOpen ? ">" : "<"));
+            playTabClickSound();
+        });
+        settingsWidgets.add(pickerToggleButton);
+        this.addDrawableChild(pickerToggleButton);
 
-        int leftRow = 0;
-        leftRow += addChannelSliderRow("Panel A", leftX, baseY + leftRow, sliderWidth, sliderHeight, gap,
-            FmeManager::getGuiPanelColor, FmeManager::setGuiPanelColor, 24);
-        leftRow += addColorGroup("Panel", leftX, baseY + leftRow, sliderWidth, sliderHeight, gap,
-            FmeManager::getGuiPanelColor, FmeManager::setGuiPanelColor);
-        leftRow += addColorGroup("Border", leftX, baseY + leftRow, sliderWidth, sliderHeight, gap,
-            FmeManager::getGuiBorderColor, FmeManager::setGuiBorderColor);
+        pickerTargetButton = new TabStyleButton(pickerBaseX, pickerBaseY, pickerWidth, pickerHeaderHeight,
+            Text.literal("Picker: " + colorPickerTarget.label), button -> {
+            GuiColorTarget[] values = GuiColorTarget.values();
+            int next = (colorPickerTarget.ordinal() + 1) % values.length;
+            colorPickerTarget = values[next];
+            button.setMessage(Text.literal("Picker: " + colorPickerTarget.label));
+            if (colorPicker != null) {
+                colorPicker.syncFromCurrent();
+            }
+            playTabClickSound();
+        });
+        settingsWidgets.add(pickerTargetButton);
+        this.addDrawableChild(pickerTargetButton);
 
-        int rightRow = 0;
-        rightRow += addColorGroup("Text", rightX, baseY + rightRow, sliderWidth, sliderHeight, gap,
-            FmeManager::getGuiTextColor, FmeManager::setGuiTextColor);
-        rightRow += addColorGroup("Accent", rightX, baseY + rightRow, sliderWidth, sliderHeight, gap,
-            FmeManager::getGuiAccentTextColor, FmeManager::setGuiAccentTextColor);
-        rightRow += addChannelSliderRow("Select A", rightX, baseY + rightRow, sliderWidth, sliderHeight, gap,
-            FmeManager::getSelectionBoxColor, FmeManager::setSelectionBoxColor, 24);
-        rightRow += addColorGroup("Select", rightX, baseY + rightRow, sliderWidth, sliderHeight, gap,
-            FmeManager::getSelectionBoxColor, FmeManager::setSelectionBoxColor);
-        GuiScaleSlider scaleSlider = new GuiScaleSlider(contentX + 10, panelY + panelHeight - Math.round(44 * scale),
-            Math.round(220 * scale), Math.round(18 * scale));
-        settingsWidgets.add(scaleSlider);
-        this.addDrawableChild(scaleSlider);
+        colorPicker = new GuiColorPicker(pickerBaseX, pickerBaseY + pickerHeaderHeight + pickerGap, pickerWidth, pickerHeight);
+        settingsWidgets.add(colorPicker);
+        this.addDrawableChild(colorPicker);
 
-        ButtonWidget reset = ButtonWidget.builder(Text.literal("Reset GUI Colors"), button -> {
+        int footerY = panelY + panelHeight - Math.round(44 * scale);
+        int resetWidth = Math.round(160 * scale);
+        int resetHeight = Math.round(20 * scale);
+        int resetX = panelX + panelWidth - Math.round(12 * scale) - resetWidth;
+        int saveWidth = Math.round(120 * scale);
+        int saveX = resetX - Math.round(6 * scale) - saveWidth;
+
+        ButtonWidget save = new TabStyleButton(
+            saveX,
+            footerY,
+            saveWidth,
+            resetHeight,
+            Text.literal("Save UI"),
+            button -> FmeManager.saveGuiColors()
+        );
+        settingsWidgets.add(save);
+        this.addDrawableChild(save);
+
+        ButtonWidget reset = new TabStyleButton(
+            resetX,
+            footerY,
+            resetWidth,
+            resetHeight,
+            Text.literal("Reset GUI Colors"),
+            button -> {
             FmeManager.resetGuiColors();
             for (GuiColorSlider slider : colorSliders) {
                 slider.sync();
             }
-        }).dimensions(panelX + panelWidth - Math.round(170 * scale), panelY + panelHeight - Math.round(44 * scale),
-            Math.round(160 * scale), Math.round(20 * scale)).build();
+        });
         settingsWidgets.add(reset);
         this.addDrawableChild(reset);
     }
@@ -866,6 +971,12 @@ public final class FmeScreen extends Screen {
         this.addDrawableChild(slider);
     }
 
+    private void syncColorSliders() {
+        for (GuiColorSlider slider : colorSliders) {
+            slider.sync();
+        }
+    }
+
     private void renderTabs(DrawContext context, int textColor, int mutedColor, int accentColor) {
         for (TabButton tabButton : tabButtons) {
             float anim = tabAnim[tabButton.tab.ordinal()];
@@ -881,7 +992,7 @@ public final class FmeScreen extends Screen {
                 int iconSize = Math.round(12 * FmeManager.getGuiScale());
                 int iconX = tabButton.x + (tabButton.width - iconSize) / 2;
                 int iconY = tabButton.y + (tabButton.height - iconSize) / 2;
-                int iconBg = mixColor(UI_TAB_ACTIVE, UI_ACCENT, 0.18f);
+                int iconBg = mixColor(UI_TAB_ACTIVE, uiAccentColor, 0.18f);
                 context.fill(iconX - 2, iconY - 2, iconX + iconSize + 2, iconY + iconSize + 2, iconBg);
                 try {
                     context.drawTexture(RenderPipelines.GUI_TEXTURED, iconId, iconX, iconY, 0, 0, iconSize, iconSize, iconSize, iconSize);
@@ -920,6 +1031,45 @@ public final class FmeScreen extends Screen {
         }
     }
 
+    private FmeScreen createScreenPreservingState() {
+        FmeScreen next = new FmeScreen(true);
+        next.tab = this.tab;
+        next.colorPickerTarget = this.colorPickerTarget;
+        next.pickerOpen = this.pickerOpen;
+        next.pickerAnim = this.pickerAnim;
+        return next;
+    }
+
+    private void updatePickerAnimation() {
+        if (tab != Tab.SETTINGS) {
+            return;
+        }
+        float target = pickerOpen ? 1f : 0f;
+        if (pickerAnimTarget != target) {
+            pickerAnimStart = pickerAnim;
+            pickerAnimTarget = target;
+            pickerAnimStartMs = Util.getMeasuringTimeMs();
+        }
+        long elapsed = Util.getMeasuringTimeMs() - pickerAnimStartMs;
+        float t = MathHelper.clamp(elapsed / (float) PICKER_ANIM_MS, 0f, 1f);
+        float eased = easeOutQuad(t);
+        pickerAnim = MathHelper.clamp(pickerAnimStart + (pickerAnimTarget - pickerAnimStart) * eased, 0f, 1f);
+        boolean showPicker = pickerAnim > 0.02f;
+        if (pickerTargetButton != null) {
+            pickerTargetButton.visible = true;
+            pickerTargetButton.active = true;
+        }
+        if (colorPicker != null) {
+            int yOffset = Math.round((1f - pickerAnim) * (pickerHeight + pickerGap));
+            colorPicker.setY(pickerBaseY + pickerHeaderHeight + pickerGap - yOffset);
+            colorPicker.visible = showPicker;
+            colorPicker.active = showPicker;
+        }
+        if (pickerToggleButton != null) {
+            pickerToggleButton.setMessage(Text.literal(pickerOpen ? ">" : "<"));
+        }
+    }
+
     private void playTabClickSound() {
         if (client == null) {
             return;
@@ -938,7 +1088,7 @@ public final class FmeScreen extends Screen {
         int r = Math.max(3, Math.round(3 * FmeManager.getGuiScale()));
         drawRoundedRect(context, x, y, w, h, r, UI_FIELD_BORDER);
         context.fill(x + 1, y + 1, x + w - 1, y + h - 1, UI_FIELD_BG);
-        context.fill(x, y + h, x + w, y + h + 1, UI_PANEL_BORDER);
+        context.fill(x, y + h, x + w, y + h + 1, uiBorderColor);
     }
 
     private void drawSidebar(DrawContext context, int panelX, int panelY, int panelHeight, int sidebarWidth, int radius) {
@@ -955,7 +1105,7 @@ public final class FmeScreen extends Screen {
     private void drawCell(DrawContext context, int x, int y, int width, int height, int bg, int border) {
         context.fill(x, y, x + width, y + height, bg);
         drawCyanBorder(context, x, y, width, height, border);
-        int highlight = withAlpha(mixColor(UI_TEXT, bg, 0.9f), 0x22);
+        int highlight = withAlpha(mixColor(uiTextColor, bg, 0.9f), 0x22);
         context.fill(x + 2, y + 2, x + width - 2, y + 3, highlight);
     }
 
@@ -967,6 +1117,13 @@ public final class FmeScreen extends Screen {
 
     private static int withAlpha(int color, int alpha) {
         return ((alpha & 0xFF) << 24) | (color & 0xFFFFFF);
+    }
+
+    private static int computeMutedColor() {
+        int textColor = FmeManager.getGuiTextColor();
+        int panelColor = FmeManager.getGuiPanelColor();
+        int textAlpha = (textColor >> 24) & 0xFF;
+        return withAlpha(mixColor(textColor, panelColor, 0.55f), textAlpha == 0 ? 0xFF : textAlpha);
     }
 
     private float getOpenProgress() {
@@ -1057,16 +1214,16 @@ public final class FmeScreen extends Screen {
             int h = this.getHeight();
             boolean hovered = this.isHovered();
             int bgBase = hovered ? UI_TAB_ACTIVE : UI_TAB_INACTIVE;
-            int bg = anim > 0f ? mixColor(bgBase, UI_ACCENT, 0.25f * eased) : bgBase;
+            int bg = anim > 0f ? mixColor(bgBase, uiAccentColor, 0.25f * eased) : bgBase;
 
             context.fill(x, y, x + w, y + h, bg);
             context.fill(x, y, x + 1, y + h, UI_SIDEBAR_BORDER);
             context.fill(x + w - 1, y, x + w, y + h, UI_SIDEBAR_BORDER);
-            int accent = withAlpha(UI_ACCENT, MathHelper.clamp(Math.round(255 * Math.max(anim, hovered ? 0.35f : 0f)), 0, 255));
+            int accent = withAlpha(uiAccentColor, MathHelper.clamp(Math.round(255 * Math.max(anim, hovered ? 0.35f : 0f)), 0, 255));
             context.fill(x + 2, y + 2, x + 5, y + h - 2, accent);
 
             var textRenderer = MinecraftClient.getInstance().textRenderer;
-            int textColor = this.active ? UI_TEXT : UI_TEXT_MUTED;
+            int textColor = this.active ? uiTextColor : uiMutedColor;
             int textWidth = textRenderer.getWidth(this.getMessage());
             int textX = x + Math.max(8, (w - textWidth) / 2);
             int textY = y + Math.max(0, (h - textRenderer.fontHeight) / 2);
@@ -1107,7 +1264,7 @@ public final class FmeScreen extends Screen {
             context.fill(x + 1, y + h - 2, x + 1 + fillW, y + h - 1, accent);
 
             var textRenderer = MinecraftClient.getInstance().textRenderer;
-            int textColor = this.active ? UI_TEXT : UI_TEXT_MUTED;
+            int textColor = this.active ? FmeManager.getGuiTextColor() : computeMutedColor();
             int labelX = x + 8;
             int labelY = y + Math.max(0, (h - textRenderer.fontHeight) / 2);
             int maxWidth = Math.max(0, w - 16);
@@ -1131,6 +1288,332 @@ public final class FmeScreen extends Screen {
         private void sync() {
             this.value = getter.getAsInt() / 255.0D;
             this.updateMessage();
+        }
+    }
+
+    private final class GuiColorPicker extends ClickableWidget {
+        private static final String VALID_HEX = "0123456789ABCDEFabcdef";
+        private float h;
+        private float s;
+        private float b;
+        private float a;
+        private boolean draggingSV;
+        private boolean draggingHue;
+        private boolean draggingAlpha;
+        private boolean hexFocused;
+        private String hexText = "";
+
+        private GuiColorPicker(int x, int y, int width, int height) {
+            super(x, y, width, height, Text.empty());
+            this.active = true;
+            this.visible = true;
+            syncFromCurrent();
+        }
+
+        private void syncFromCurrent() {
+            int argb = getTargetColor();
+            Color color = new Color(argb, true);
+            float[] hsb = Color.RGBtoHSB(color.getRed(), color.getGreen(), color.getBlue(), null);
+            h = hsb[0];
+            s = hsb[1];
+            b = hsb[2];
+            a = color.getAlpha() / 255f;
+            updateHexText();
+        }
+
+        @Override
+        protected void renderWidget(DrawContext context, int mouseX, int mouseY, float delta) {
+            if (!draggingSV && !draggingHue && !draggingAlpha && !hexFocused) {
+                syncFromCurrent();
+            }
+            PickerLayout layout = layout();
+
+            context.fill(layout.x, layout.y, layout.x + layout.w, layout.y + layout.h, UI_CONTROL_BG);
+            context.fill(layout.x, layout.y, layout.x + layout.w, layout.y + 1, UI_CONTROL_BORDER);
+            context.fill(layout.x, layout.y + layout.h - 1, layout.x + layout.w, layout.y + layout.h, UI_CONTROL_BORDER);
+            context.fill(layout.x, layout.y, layout.x + 1, layout.y + layout.h, UI_CONTROL_BORDER);
+            context.fill(layout.x + layout.w - 1, layout.y, layout.x + layout.w, layout.y + layout.h, UI_CONTROL_BORDER);
+
+            context.drawText(textRenderer, Text.literal("Color Picker"),
+                layout.x + layout.padding, layout.y + Math.max(0, (layout.headerH - textRenderer.fontHeight) / 2),
+                uiTextColor, false);
+
+            int previewSize = Math.max(8, Math.round(10 * FmeManager.getGuiScale()));
+            int previewX = layout.x + layout.w - layout.padding - previewSize;
+            int previewY = layout.y + Math.max(0, (layout.headerH - previewSize) / 2);
+            drawCheckerboard(context, previewX, previewY, previewSize, previewSize, Math.max(2, previewSize / 4));
+            context.fill(previewX, previewY, previewX + previewSize, previewY + previewSize, toArgb(Color.HSBtoRGB(h, s, b), a));
+
+            drawHueBar(context, layout);
+            drawAlphaBar(context, layout);
+            drawSvBox(context, layout);
+            drawHexField(context, layout);
+        }
+
+        @Override
+        protected void appendClickableNarrations(NarrationMessageBuilder builder) {
+            this.appendDefaultNarrations(builder);
+        }
+
+        @Override
+        public void onClick(Click click, boolean doubleClick) {
+            if (!this.active || !this.visible || click.button() != 0) {
+                return;
+            }
+            double mx = click.x();
+            double my = click.y();
+            PickerLayout layout = layout();
+            if (isInRect(mx, my, layout.hexX, layout.hexY, layout.hexW, layout.hexH)) {
+                hexFocused = true;
+                return;
+            }
+            hexFocused = false;
+            startDrag(mx, my, layout);
+        }
+
+        @Override
+        protected void onDrag(Click click, double deltaX, double deltaY) {
+            if (click.button() != 0) {
+                return;
+            }
+            if (draggingAlpha || draggingHue || draggingSV) {
+                updateFromMouse(click.x(), click.y(), layout());
+            }
+        }
+
+        @Override
+        public void onRelease(Click click) {
+            draggingSV = false;
+            draggingHue = false;
+            draggingAlpha = false;
+        }
+
+        private void startDrag(double mx, double my, PickerLayout layout) {
+            draggingAlpha = isInRect(mx, my, layout.alphaX, layout.pickerY, layout.barW, layout.pickerH);
+            draggingHue = isInRect(mx, my, layout.hueX, layout.pickerY, layout.barW, layout.pickerH);
+            draggingSV = isInRect(mx, my, layout.svX, layout.pickerY, layout.svW, layout.pickerH);
+            updateFromMouse(mx, my, layout);
+        }
+
+        private void updateFromMouse(double mx, double my, PickerLayout layout) {
+            if (draggingAlpha) {
+                a = clamp01(1f - (float) ((my - layout.pickerY) / layout.pickerH));
+            }
+            if (draggingHue) {
+                h = clamp01((float) ((my - layout.pickerY) / layout.pickerH));
+            }
+            if (draggingSV) {
+                s = clamp01((float) ((mx - layout.svX) / layout.svW));
+                b = clamp01(1f - (float) ((my - layout.pickerY) / layout.pickerH));
+            }
+            applyColor();
+        }
+
+        private void applyColor() {
+            int rgb = Color.HSBtoRGB(h, s, b);
+            int argb = toArgb(rgb, a);
+            setTargetColor(argb);
+            updateHexText();
+            syncColorSliders();
+        }
+
+        private void updateHexText() {
+            int argb = toArgb(Color.HSBtoRGB(h, s, b), a);
+            int alpha = (argb >> 24) & 0xFF;
+            int red = (argb >> 16) & 0xFF;
+            int green = (argb >> 8) & 0xFF;
+            int blue = argb & 0xFF;
+            hexText = String.format(Locale.ROOT, "%02X%02X%02X%02X", alpha, red, green, blue);
+        }
+
+        private void drawSvBox(DrawContext context, PickerLayout layout) {
+            int base = Color.HSBtoRGB(h, 1f, 1f) | 0xFF000000;
+            context.fill(layout.svX, layout.pickerY, layout.svX + layout.svW, layout.pickerY + layout.pickerH, base);
+            drawHorizontalGradient(context, layout.svX, layout.pickerY, layout.svW, layout.pickerH, 0xFFFFFFFF, 0x00FFFFFF);
+            context.fillGradient(layout.svX, layout.pickerY, layout.svX + layout.svW, layout.pickerY + layout.pickerH,
+                0x00000000, 0xFF000000);
+
+            int ix = Math.round(layout.svX + s * layout.svW);
+            int iy = Math.round(layout.pickerY + (1f - b) * layout.pickerH);
+            context.fill(ix - 2, iy - 2, ix + 2, iy + 2, 0xFFFFFFFF);
+            context.fill(ix - 1, iy - 1, ix + 1, iy + 1, 0xFF000000);
+        }
+
+        private void drawHueBar(DrawContext context, PickerLayout layout) {
+            int segments = 12;
+            float step = layout.pickerH / (float) segments;
+            for (int i = 0; i < segments; i++) {
+                int c1 = Color.HSBtoRGB(i / (float) segments, 1f, 1f) | 0xFF000000;
+                int c2 = Color.HSBtoRGB((i + 1) / (float) segments, 1f, 1f) | 0xFF000000;
+                int yStart = Math.round(layout.pickerY + i * step);
+                int yEnd = Math.round(layout.pickerY + (i + 1) * step);
+                context.fillGradient(layout.hueX, yStart, layout.hueX + layout.barW, yEnd, c1, c2);
+            }
+            int markerY = Math.round(layout.pickerY + h * layout.pickerH);
+            context.fill(layout.hueX - 1, markerY - 1, layout.hueX + layout.barW + 1, markerY + 1, 0xFFFFFFFF);
+        }
+
+        private void drawAlphaBar(DrawContext context, PickerLayout layout) {
+            if (!layout.hasAlpha) {
+                return;
+            }
+            drawCheckerboard(context, layout.alphaX, layout.pickerY, layout.barW, layout.pickerH, Math.max(2, layout.barW / 2));
+            int base = Color.HSBtoRGB(h, s, b) | 0xFF000000;
+            int top = (0xFF << 24) | (base & 0xFFFFFF);
+            int bottom = base & 0x00FFFFFF;
+            context.fillGradient(layout.alphaX, layout.pickerY, layout.alphaX + layout.barW, layout.pickerY + layout.pickerH,
+                top, bottom);
+            int markerY = Math.round(layout.pickerY + (1f - a) * layout.pickerH);
+            context.fill(layout.alphaX - 1, markerY - 1, layout.alphaX + layout.barW + 1, markerY + 1, 0xFFFFFFFF);
+        }
+
+        private void drawHexField(DrawContext context, PickerLayout layout) {
+            context.fill(layout.hexX, layout.hexY, layout.hexX + layout.hexW, layout.hexY + layout.hexH, UI_FIELD_BG);
+            context.fill(layout.hexX, layout.hexY + layout.hexH - 1, layout.hexX + layout.hexW, layout.hexY + layout.hexH,
+                UI_FIELD_BORDER);
+            if (hexFocused) {
+                context.fill(layout.hexX, layout.hexY + layout.hexH - 2, layout.hexX + layout.hexW, layout.hexY + layout.hexH - 1,
+                    uiAccentColor);
+            }
+            String cursor = hexFocused && (Util.getMeasuringTimeMs() / 500) % 2 == 0 ? "|" : "";
+            context.drawText(textRenderer, Text.literal("Hex: #" + hexText + cursor),
+                layout.hexX + 4, layout.hexY + 2, uiTextColor, false);
+        }
+
+        boolean handleCharTyped(char codePoint) {
+            if (!hexFocused) {
+                return false;
+            }
+            if (VALID_HEX.indexOf(codePoint) < 0 || hexText.length() >= 8) {
+                return true;
+            }
+            hexText = (hexText + Character.toUpperCase(codePoint));
+            tryUpdateFromHex();
+            return true;
+        }
+
+        boolean handleKeyPressed(int keyCode) {
+            if (!hexFocused) {
+                return false;
+            }
+            if (keyCode == GLFW.GLFW_KEY_BACKSPACE && !hexText.isEmpty()) {
+                hexText = hexText.substring(0, hexText.length() - 1);
+                tryUpdateFromHex();
+            } else if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_ESCAPE) {
+                hexFocused = false;
+            }
+            return true;
+        }
+
+        private void tryUpdateFromHex() {
+            if (hexText.length() != 8) {
+                return;
+            }
+            try {
+                int argb = (int) Long.parseLong(hexText, 16);
+                Color color = new Color(argb, true);
+                float[] hsb = Color.RGBtoHSB(color.getRed(), color.getGreen(), color.getBlue(), null);
+                h = hsb[0];
+                s = hsb[1];
+                b = hsb[2];
+                a = color.getAlpha() / 255f;
+                setTargetColor(argb);
+                syncColorSliders();
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        private int getTargetColor() {
+            return colorPickerTarget.getter.getAsInt();
+        }
+
+        private void setTargetColor(int argb) {
+            colorPickerTarget.setter.accept(argb);
+        }
+
+        private PickerLayout layout() {
+            float scale = FmeManager.getGuiScale();
+            int padding = Math.max(4, Math.round(6 * scale));
+            int headerH = Math.max(14, Math.round(18 * scale));
+            int hexH = Math.max(12, Math.round(14 * scale));
+            int barW = Math.max(8, Math.round(10 * scale));
+            int barGap = Math.max(3, Math.round(4 * scale));
+            int x = getX();
+            int y = getY();
+            int w = getWidth();
+            int h = getHeight();
+            int pickerY = y + headerH + padding;
+            int pickerBottom = y + h - padding - hexH;
+            int pickerH = Math.max(12, pickerBottom - pickerY);
+            int alphaX = x + padding;
+            int hueX = alphaX + barW + barGap;
+            int svX = hueX + barW + barGap;
+            int svW = Math.max(10, x + w - padding - svX);
+            int hexX = x + padding;
+            int hexY = y + h - padding - hexH;
+            int hexW = w - padding * 2;
+            return new PickerLayout(x, y, w, h, padding, headerH, pickerY, pickerH, barW, alphaX, hueX, svX, svW,
+                hexX, hexY, hexW, hexH, true);
+        }
+
+        private void drawCheckerboard(DrawContext context, int x, int y, int w, int h, int size) {
+            for (int ix = 0; ix < w; ix += size) {
+                for (int iy = 0; iy < h; iy += size) {
+                    boolean light = ((ix / size) + (iy / size)) % 2 == 0;
+                    int color = light ? 0xFF323232 : 0xFF1E1E1E;
+                    context.fill(x + ix, y + iy, x + Math.min(ix + size, w), y + Math.min(iy + size, h), color);
+                }
+            }
+        }
+
+        private void drawHorizontalGradient(DrawContext context, int x, int y, int w, int h, int left, int right) {
+            if (w <= 0 || h <= 0) {
+                return;
+            }
+            for (int i = 0; i < w; i++) {
+                float t = w == 1 ? 0f : i / (float) (w - 1);
+                int color = blendColor(left, right, t);
+                context.fill(x + i, y, x + i + 1, y + h, color);
+            }
+        }
+
+        private int blendColor(int a, int b, float t) {
+            int aA = (a >> 24) & 0xFF;
+            int aR = (a >> 16) & 0xFF;
+            int aG = (a >> 8) & 0xFF;
+            int aB = a & 0xFF;
+            int bA = (b >> 24) & 0xFF;
+            int bR = (b >> 16) & 0xFF;
+            int bG = (b >> 8) & 0xFF;
+            int bB = b & 0xFF;
+            int oA = MathHelper.clamp(Math.round(aA + (bA - aA) * t), 0, 255);
+            int oR = MathHelper.clamp(Math.round(aR + (bR - aR) * t), 0, 255);
+            int oG = MathHelper.clamp(Math.round(aG + (bG - aG) * t), 0, 255);
+            int oB = MathHelper.clamp(Math.round(aB + (bB - aB) * t), 0, 255);
+            return (oA << 24) | (oR << 16) | (oG << 8) | oB;
+        }
+
+        private int toArgb(int rgb, float alpha) {
+            int a = MathHelper.clamp(Math.round(alpha * 255f), 0, 255);
+            return (a << 24) | (rgb & 0xFFFFFF);
+        }
+
+        private boolean isInRect(double mx, double my, int x, int y, int w, int h) {
+            return mx >= x && mx <= x + w && my >= y && my <= y + h;
+        }
+
+        private float clamp01(float value) {
+            return MathHelper.clamp(value, 0f, 1f);
+        }
+
+        private record PickerLayout(
+            int x, int y, int w, int h,
+            int padding, int headerH,
+            int pickerY, int pickerH,
+            int barW, int alphaX, int hueX, int svX, int svW,
+            int hexX, int hexY, int hexW, int hexH,
+            boolean hasAlpha
+        ) {
         }
     }
 
@@ -1159,7 +1642,7 @@ public final class FmeScreen extends Screen {
             context.fill(x + 1, y + h - 2, x + 1 + fillW, y + h - 1, accent);
 
             var textRenderer = MinecraftClient.getInstance().textRenderer;
-            int textColor = this.active ? UI_TEXT : UI_TEXT_MUTED;
+            int textColor = this.active ? uiTextColor : uiMutedColor;
             int labelX = x + 8;
             int labelY = y + Math.max(0, (h - textRenderer.fontHeight) / 2);
             int maxWidth = Math.max(0, w - 16);
@@ -1182,7 +1665,7 @@ public final class FmeScreen extends Screen {
             }
             FmeManager.setGuiScale(scale);
             if (client != null) {
-                client.setScreen(new FmeScreen(true));
+                client.setScreen(FmeScreen.this.createScreenPreservingState());
             }
         }
     }
