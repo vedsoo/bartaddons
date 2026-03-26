@@ -44,6 +44,8 @@ import java.util.Map;
 import java.util.Locale;
 
 public final class HatClientMod implements ClientModInitializer {
+    private static final KeyBinding.Category BART_ADDONS_CATEGORY =
+        KeyBinding.Category.create(new Identifier("hat", "bart_addons"));
     private static KeyBinding openGuiKey;
     private static KeyBinding rotateFmeKey;
     private static KeyBinding deleteFmeKey;
@@ -72,37 +74,37 @@ public final class HatClientMod implements ClientModInitializer {
             "key.hat.open_gui",
             InputUtil.Type.KEYSYM,
             GLFW.GLFW_KEY_H,
-            KeyBinding.Category.MISC
+            BART_ADDONS_CATEGORY
         ));
         rotateFmeKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.hat.fme_rotate",
             InputUtil.Type.KEYSYM,
             GLFW.GLFW_KEY_R,
-            KeyBinding.Category.MISC
+            BART_ADDONS_CATEGORY
         ));
         deleteFmeKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.hat.fme_delete",
             InputUtil.Type.KEYSYM,
             GLFW.GLFW_KEY_P,
-            KeyBinding.Category.MISC
+            BART_ADDONS_CATEGORY
         ));
         copyFmeKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.hat.fme_copy",
             InputUtil.Type.KEYSYM,
             GLFW.GLFW_KEY_C,
-            KeyBinding.Category.MISC
+            BART_ADDONS_CATEGORY
         ));
         doorGlassKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.hat.door_glass",
             InputUtil.Type.KEYSYM,
             GLFW.GLFW_KEY_M,
-            KeyBinding.Category.MISC
+            BART_ADDONS_CATEGORY
         ));
         rotateSchematicKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.hat.schematic_rotate",
             InputUtil.Type.KEYSYM,
             GLFW.GLFW_KEY_MINUS,
-            KeyBinding.Category.MISC
+            BART_ADDONS_CATEGORY
         ));
 
         ClientTickEvents.END_CLIENT_TICK.register(HatClientMod::handleKeys);

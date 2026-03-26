@@ -1,6 +1,10 @@
 {
+  "key.category.hat.bart_addons": "Bart Addons",
   "category.hat.general": "Chinese Hat",
   "key.hat.open_gui": "Open Hat GUI",
   "key.hat.fme_rotate": "Rotate FME Block",
-  "key.hat.fme_copy": "Copy FME Block"
+  "key.hat.fme_delete": "Remove Ghost Block",
+  "key.hat.fme_copy": "Copy FME Block",
+  "key.hat.door_glass": "Toggle Dungeon Door Glass",
+  "key.hat.schematic_rotate": "Rotate Schematic"
 }
