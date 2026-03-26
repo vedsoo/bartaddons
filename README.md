@@ -81,9 +81,3 @@ i dont care that its long it works so im not changing it
 also dont use /fme offset doesnt work and is ass so just dont use it  will dell later 
 
 
-binds
-
-"-" rotation change for schematics
-"r" roation change custom texures
-
-dont use the glass door thing doesnt work places the glass wrong and is ass 
