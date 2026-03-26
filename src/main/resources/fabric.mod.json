@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "hat",
+  "version": "${version}",
+  "name": "\u00a75Bart Addons",
+  "description": "all mighty vibe coder",
+  "authors": [
+    "\u00a7dvedso"
+  ],
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "hat.fabric.HatClientMod"
+    ]
+  },
+  "mixins": [
+    "hat.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "fabric-api": "*",
+    "minecraft": "~1.21.10"
+  }
+}

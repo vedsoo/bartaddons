@@ -1,0 +1,16 @@
+{
+  "required": true,
+  "package": "hat.fabric.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [],
+  "client": [
+    "BlockRenderManagerAccessor",
+    "BlockRenderManagerMixin",
+    "ChunkRendererRegionMixin",
+    "SodiumLevelSliceMixin",
+    "SodiumBlockRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
