@@ -45,7 +45,7 @@ import java.util.Locale;
 
 public final class HatClientMod implements ClientModInitializer {
     private static final KeyBinding.Category BART_ADDONS_CATEGORY =
-        KeyBinding.Category.create(new Identifier("hat", "bart_addons"));
+        KeyBinding.Category.create(Identifier.of("hat", "bart_addons"));
     private static KeyBinding openGuiKey;
     private static KeyBinding rotateFmeKey;
     private static KeyBinding deleteFmeKey;
