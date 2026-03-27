@@ -3,5 +3,15 @@
     "sounds": [
       "hat:ui/click"
     ]
+  },
+  "ui.close": {
+    "sounds": [
+      "hat:ui/close"
+    ]
+  },
+  "ui.open": {
+    "sounds": [
+      "hat:ui/open"
+    ]
   }
 }
