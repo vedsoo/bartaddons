@@ -169,6 +169,7 @@ public final class HatClientMod implements ClientModInitializer {
 
     private static void handleKeys(MinecraftClient client) {
         FmeManager.clientTick(client);
+        HatTextureManager.tickAnimations(System.currentTimeMillis());
 
         while (rotateFmeKey.wasPressed()) {
             if (!FmeManager.isEnabled() || !FmeManager.isEditMode() || client.player == null) {

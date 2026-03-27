@@ -59,6 +59,10 @@ public final class HatTextureManager {
 
         Path path = pick.get();
         try {
+            String lower = path.getFileName().toString().toLowerCase(Locale.ROOT);
+            if (lower.endsWith(".gif")) {
+                return;
+            }
             NativeImage image = readImage(path);
             if (image == null) {
                 return;
@@ -126,12 +130,16 @@ public final class HatTextureManager {
             return null;
         }
         try {
+            String lower = path.getFileName().toString().toLowerCase(Locale.ROOT);
+            Identifier id = Identifier.of("hat", "custom/" + sanitizeTexturePath(path.getFileName().toString()));
+            if (lower.endsWith(".gif")) {
+                return null;
+            }
             NativeImage image = readImage(path);
             if (image == null) {
                 return null;
             }
             NativeImage finalImage = normalizeTexture(image);
-            Identifier id = Identifier.of("hat", "custom/" + sanitizeTexturePath(path.getFileName().toString()));
             NativeImageBackedTexture newTexture = new NativeImageBackedTexture(() -> "hat_custom/" + path.getFileName(), finalImage);
             newTexture.setFilter(true, true);
             MinecraftClient.getInstance().getTextureManager().registerTexture(id, newTexture);
@@ -162,6 +170,10 @@ public final class HatTextureManager {
         return null;
     }
 
+    public static void tickAnimations(long nowMs) {
+        // GIF textures are not supported.
+    }
+
     private static Optional<Path> findPreferredTexture(String preferredFileName) {
         if (preferredFileName != null && !preferredFileName.isBlank()) {
             Path primary = TEXTURE_DIR.resolve(preferredFileName);
@@ -183,7 +195,7 @@ public final class HatTextureManager {
                 .filter(Files::isRegularFile)
                 .filter(path -> {
                     String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
-                    return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".gif");
+                    return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg");
                 })
                 .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase(Locale.ROOT)))
                 .forEach(entries::add);
@@ -238,7 +250,7 @@ public final class HatTextureManager {
                 .filter(Files::isRegularFile)
                 .filter(path -> {
                     String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
-                    return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".gif");
+                    return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg");
                 })
                 .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase(Locale.ROOT)))
                 .findFirst();
@@ -273,6 +285,24 @@ public final class HatTextureManager {
             int srcY = y * size / target;
             for (int x = 0; x < target; x++) {
                 int srcX = x * size / target;
+                scaled.setColorArgb(x, y, cropped.getColorArgb(srcX, srcY));
+            }
+        }
+        cropped.close();
+        return scaled;
+    }
+
+    private static NativeImage normalizeTextureToSize(NativeImage image, int targetSize) {
+        NativeImage cropped = centerCropToSquare(image);
+        if (cropped.getWidth() == targetSize && cropped.getHeight() == targetSize) {
+            return cropped;
+        }
+        NativeImage scaled = new NativeImage(targetSize, targetSize, true);
+        int size = cropped.getWidth();
+        for (int y = 0; y < targetSize; y++) {
+            int srcY = y * size / targetSize;
+            for (int x = 0; x < targetSize; x++) {
+                int srcX = x * size / targetSize;
                 scaled.setColorArgb(x, y, cropped.getColorArgb(srcX, srcY));
             }
         }

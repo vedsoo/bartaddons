@@ -47,6 +47,7 @@ public final class FmeCustomTextureRenderer {
         if (custom.isEmpty()) {
             return;
         }
+        HatTextureManager.tickAnimations(System.currentTimeMillis());
 
         BASE_BUFFER_CACHE.clear();
         long now = client.world.getTime();
