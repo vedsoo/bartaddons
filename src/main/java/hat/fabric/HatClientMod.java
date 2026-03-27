@@ -39,6 +39,7 @@ import com.mojang.brigadier.CommandDispatcher;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
@@ -413,7 +414,7 @@ public final class HatClientMod implements ClientModInitializer {
                     .then(ClientCommandManager.literal("delete").executes(ctx -> executeWorldEditClearSelection(ctx.getSource())))
                     .then(ClientCommandManager.literal("replace")
                         .then(ClientCommandManager.argument("from", IdentifierArgumentType.identifier())
-                            .suggests((ctx, builder) -> CommandSource.suggestIdentifiers(Registries.BLOCK.getIds(), builder))
+                            .suggests((ctx, builder) -> suggestWorldEditSelectionBlocks(ctx.getSource(), builder))
                             .then(ClientCommandManager.argument("to", IdentifierArgumentType.identifier())
                                 .suggests((ctx, builder) -> CommandSource.suggestIdentifiers(Registries.BLOCK.getIds(), builder))
                                 .executes(ctx -> executeWorldEditReplace(
@@ -839,6 +840,41 @@ public final class HatClientMod implements ClientModInitializer {
             builder.suggest(name);
         }
         return builder.buildFuture();
+    }
+
+    private static java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestWorldEditSelectionBlocks(
+        FabricClientCommandSource source,
+        com.mojang.brigadier.suggestion.SuggestionsBuilder builder
+    ) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.world == null) {
+            return builder.buildFuture();
+        }
+        Selection selection = getWorldEditSelectionForRender();
+        if (selection == null) {
+            return builder.buildFuture();
+        }
+        if (selection.volume > WORLD_EDIT_MAX_BLOCKS) {
+            return builder.buildFuture();
+        }
+        HashSet<Identifier> ids = new HashSet<>();
+        BlockPos.Mutable pos = new BlockPos.Mutable();
+        for (int y = selection.min.getY(); y <= selection.max.getY(); y++) {
+            for (int x = selection.min.getX(); x <= selection.max.getX(); x++) {
+                for (int z = selection.min.getZ(); z <= selection.max.getZ(); z++) {
+                    pos.set(x, y, z);
+                    BlockState state = client.world.getBlockState(pos);
+                    if (state.isAir()) {
+                        continue;
+                    }
+                    ids.add(Registries.BLOCK.getId(state.getBlock()));
+                }
+            }
+        }
+        if (ids.isEmpty()) {
+            return builder.buildFuture();
+        }
+        return CommandSource.suggestIdentifiers(ids, builder);
     }
 
     private static int executeSchematicPaste(FabricClientCommandSource source, String fileRaw) {
