@@ -56,11 +56,11 @@ public final class FmeManager {
     private static int selectedRotation = 0;
     private static int openScreenInTicks = -1;
     private static ScreenMode openScreenMode = ScreenMode.DEFAULT;
-    private static int guiPanelColor = 0xE0161216;
-    private static int guiBorderColor = 0x003A2A2F;
-    private static int guiTextColor = 0xFFF5E9E1;
-    private static int guiAccentTextColor = 0xFFF28C3A;
-    private static int selectionBoxColor = 0x552E1C20;
+    private static int guiPanelColor = 0xFF1A120B;
+    private static int guiBorderColor = 0xFF7A3A12;
+    private static int guiTextColor = 0xFFFFE3C2;
+    private static int guiAccentTextColor = 0xFFFF8A2B;
+    private static int selectionBoxColor = 0x66FF8A2B;
     private static float guiScale = 1.5f;
     private static float guiBlockBrightness = 2.0f;
     private static boolean autoSaveEnabled = true;
@@ -641,102 +641,6 @@ public final class FmeManager {
         return saved;
     }
 
-    public static int stripAirReplacements() {
-        int removed = 0;
-        if (POSITION_REPLACEMENTS.isEmpty()) {
-            return removed;
-        }
-        for (var it = POSITION_REPLACEMENTS.entrySet().iterator(); it.hasNext(); ) {
-            Map.Entry<Long, Block> entry = it.next();
-            if (entry.getValue() == net.minecraft.block.Blocks.AIR) {
-                it.remove();
-                POSITION_ROTATIONS.remove(entry.getKey());
-                POSITION_CUSTOM_TEXTURES.remove(entry.getKey());
-                POSITION_CUSTOM_TEXTURE_SOURCES.remove(entry.getKey());
-                removed++;
-            }
-        }
-        if (removed > 0) {
-            maybeClearRemapCache();
-            save();
-            refreshWorld(null);
-        }
-        return removed;
-    }
-
-    public static boolean convertFloorsConfig(String pathRaw, String nameRaw) {
-        ensureConfigDir();
-        Path source = resolveConfigPath(pathRaw, false);
-        if (source == null || !Files.exists(source)) {
-            return false;
-        }
-        String targetName = nameRaw;
-        if (targetName == null || targetName.isBlank()) {
-            String fileName = source.getFileName() != null ? source.getFileName().toString() : "floors";
-            targetName = stripExtension(fileName);
-        }
-        Path target = resolveConfigPath(targetName, true);
-        if (target == null) {
-            return false;
-        }
-
-        clearState(true);
-        try {
-            String raw = Files.readString(source, StandardCharsets.UTF_8);
-            JsonObject root = JsonParser.parseString(raw).getAsJsonObject();
-            boolean loaded = loadFloorsConfig(root);
-            if (!loaded) {
-                return false;
-            }
-            enabled = true;
-            editMode = false;
-            boolean saved = saveToPath(target);
-            if (saved) {
-                currentSavePath = target;
-                recordLastConfigPath(target);
-            }
-            return saved;
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
-    public static boolean convertFloorsConfigSkippingAir(String pathRaw, String nameRaw) {
-        ensureConfigDir();
-        Path source = resolveConfigPath(pathRaw, false);
-        if (source == null || !Files.exists(source)) {
-            return false;
-        }
-        String targetName = nameRaw;
-        if (targetName == null || targetName.isBlank()) {
-            String fileName = source.getFileName() != null ? source.getFileName().toString() : "floors";
-            targetName = stripExtension(fileName);
-        }
-        Path target = resolveConfigPath(targetName, true);
-        if (target == null) {
-            return false;
-        }
-
-        clearState(true);
-        try {
-            String raw = Files.readString(source, StandardCharsets.UTF_8);
-            JsonObject root = JsonParser.parseString(raw).getAsJsonObject();
-            boolean loaded = loadFloorsConfig(root, true);
-            if (!loaded) {
-                return false;
-            }
-            enabled = true;
-            editMode = false;
-            boolean saved = saveToPath(target);
-            if (saved) {
-                currentSavePath = target;
-                recordLastConfigPath(target);
-            }
-            return saved;
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
 
     private static boolean loadFromPath(Path path, boolean resetState, boolean refreshWorld) {
         clearState(resetState);
@@ -791,21 +695,6 @@ public final class FmeManager {
         }
         if (root.has("selectedRotation")) {
             selectedRotation = Math.floorMod(root.get("selectedRotation").getAsInt(), 4);
-        }
-        if (root.has("guiPanelColor")) {
-            guiPanelColor = root.get("guiPanelColor").getAsInt();
-        }
-        if (root.has("guiBorderColor")) {
-            guiBorderColor = root.get("guiBorderColor").getAsInt();
-        }
-        if (root.has("guiTextColor")) {
-            guiTextColor = root.get("guiTextColor").getAsInt();
-        }
-        if (root.has("guiAccentTextColor")) {
-            guiAccentTextColor = root.get("guiAccentTextColor").getAsInt();
-        }
-        if (root.has("selectionBoxColor")) {
-            selectionBoxColor = root.get("selectionBoxColor").getAsInt();
         }
         guiScale = 1.5f;
         if (root.has("blockBrightness")) {
@@ -1087,11 +976,6 @@ public final class FmeManager {
             root.addProperty("selectedCustomTexture", selectedCustomTexture);
         }
         root.addProperty("selectedRotation", selectedRotation);
-        root.addProperty("guiPanelColor", guiPanelColor);
-        root.addProperty("guiBorderColor", guiBorderColor);
-        root.addProperty("guiTextColor", guiTextColor);
-        root.addProperty("guiAccentTextColor", guiAccentTextColor);
-        root.addProperty("selectionBoxColor", selectionBoxColor);
         root.addProperty("blockBrightness", guiBlockBrightness);
         root.addProperty("offsetX", offsetX);
         root.addProperty("offsetY", offsetY);
@@ -1157,11 +1041,11 @@ public final class FmeManager {
             selectedSourceType = SelectedSourceType.BLOCK;
             selectedCustomTexture = null;
             selectedRotation = 0;
-            guiPanelColor = 0xE0161216;
-            guiBorderColor = 0x003A2A2F;
-            guiTextColor = 0xFFF5E9E1;
-            guiAccentTextColor = 0xFFF28C3A;
-            selectionBoxColor = 0x552E1C20;
+            guiPanelColor = 0xFF1A120B;
+            guiBorderColor = 0xFF7A3A12;
+            guiTextColor = 0xFFFFE3C2;
+            guiAccentTextColor = 0xFFFF8A2B;
+            selectionBoxColor = 0x66FF8A2B;
             guiScale = 1.5f;
             guiBlockBrightness = 2.0f;
             autoSaveEnabled = true;
@@ -1873,44 +1757,6 @@ public final class FmeManager {
 
     public static int getSelectionBoxColor() {
         return selectionBoxColor;
-    }
-
-    public static void setGuiPanelColor(int argb) {
-        guiPanelColor = argb;
-        save();
-    }
-
-    public static void setGuiBorderColor(int argb) {
-        guiBorderColor = argb;
-        save();
-    }
-
-    public static void setGuiTextColor(int argb) {
-        guiTextColor = argb;
-        save();
-    }
-
-    public static void setGuiAccentTextColor(int argb) {
-        guiAccentTextColor = argb;
-        save();
-    }
-
-    public static void setSelectionBoxColor(int argb) {
-        selectionBoxColor = argb;
-        save();
-    }
-
-    public static void resetGuiColors() {
-        guiPanelColor = 0xE0161216;
-        guiBorderColor = 0x003A2A2F;
-        guiTextColor = 0xFFF5E9E1;
-        guiAccentTextColor = 0xFFF28C3A;
-        selectionBoxColor = 0x552E1C20;
-        save();
-    }
-
-    public static void saveGuiColors() {
-        save();
     }
 
     public static float getGuiScale() {

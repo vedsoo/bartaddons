@@ -25,10 +25,6 @@ Config 6. /fme config load
 
 10. /fme config add <name>
 
-11. /fme config stripair
-
-12. /fme config convertfloors skipair <path>
-
 WorldEdit 13. /fme worldedit pos1
 
 14. /fme worldedit pos1 <x> <y> <z>
@@ -49,36 +45,28 @@ WorldEdit 13. /fme worldedit pos1
 
 22. /fme worldedit replace <from> <to>
 
-Offset 23. /fme offset
+Replace 23. /fme replace <from> <to>
 
-24. /fme offset here
+24. /fme replace <from> with <to>
 
-25. /fme offset set <x> <y> <z>
+25. /fme replace <from> texture <file>
 
-26. /fme offset reset
+26. /fme replace <from> with texture <file>
 
-Replace 27. /fme replace <from> <to>
+Custom textures 27. /fme addurl <url>
 
-28. /fme replace <from> with <to>
+Images 28. /fme image import <file>
 
-29. /fme replace <from> texture <file>
+29. /fme image import <file> <orientation>
 
-30. /fme replace <from> with texture <file>
+30. /fme image import <file> <orientation> <width> <height>
 
-Custom textures 31. /fme addurl <url>
+Schematics 31. /fme schematic paste <file>
 
-Images 32. /fme image import <file>
-
-33. /fme image import <file> <orientation>
-
-34. /fme image import <file> <orientation> <width> <height>
-
-Schematics 35. /fme schematic paste <file>
-
-36. /fme schematic undo     
+32. /fme schematic undo     
 
 
 i dont care that its long it works so im not changing it 
-also dont use /fme offset doesnt work and is ass so just dont use it  will dell later 
+ 
 
 

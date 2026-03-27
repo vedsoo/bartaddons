@@ -350,16 +350,6 @@ public final class HatClientMod implements ClientModInitializer {
                                 ctx.getSource().sendFeedback(Text.literal("Saved FME config: " + name));
                                 return 1;
                             })))
-                    .then(ClientCommandManager.literal("stripair")
-                        .executes(ctx -> {
-                            int removed = FmeManager.stripAirReplacements();
-                            if (removed == 0) {
-                                ctx.getSource().sendFeedback(Text.literal("No air replacements to remove."));
-                                return 1;
-                            }
-                            ctx.getSource().sendFeedback(Text.literal("Removed " + removed + " air replacements."));
-                            return 1;
-                        }))
                     .then(ClientCommandManager.literal("add")
                         .then(ClientCommandManager.argument("name", StringArgumentType.greedyString())
                             .executes(ctx -> {
@@ -372,62 +362,6 @@ public final class HatClientMod implements ClientModInitializer {
                             ctx.getSource().sendFeedback(Text.literal("Added and loaded FME config: " + name));
                             return 1;
                         }))))
-                    .then(ClientCommandManager.literal("convertfloors")
-                        .then(ClientCommandManager.literal("skipair")
-                            .then(ClientCommandManager.argument("path", StringArgumentType.string())
-                                .executes(ctx -> {
-                                    String path = ctx.getArgument("path", String.class);
-                                    boolean converted = FmeManager.convertFloorsConfigSkippingAir(path, null);
-                                    if (!converted) {
-                                        ctx.getSource().sendError(Text.literal("Failed to convert floors config (skip air): " + path));
-                                        return 0;
-                                    }
-                                    ctx.getSource().sendFeedback(Text.literal("Converted floors config (skip air): " + path));
-                                    return 1;
-                                })
-                                .then(ClientCommandManager.argument("name", StringArgumentType.greedyString())
-                                    .executes(ctx -> {
-                                        String path = ctx.getArgument("path", String.class);
-                                        String name = ctx.getArgument("name", String.class);
-                                        boolean converted = FmeManager.convertFloorsConfigSkippingAir(path, name);
-                                        if (!converted) {
-                                            ctx.getSource().sendError(Text.literal(
-                                                "Failed to convert floors config (skip air): " + path + " -> " + name
-                                            ));
-                                            return 0;
-                                        }
-                                        ctx.getSource().sendFeedback(Text.literal(
-                                            "Converted floors config (skip air): " + path + " -> " + name
-                                        ));
-                                        return 1;
-                                    }))))
-                        .then(ClientCommandManager.argument("path", StringArgumentType.string())
-                            .executes(ctx -> {
-                                String path = ctx.getArgument("path", String.class);
-                                boolean converted = FmeManager.convertFloorsConfig(path, null);
-                                if (!converted) {
-                                    ctx.getSource().sendError(Text.literal("Failed to convert floors config: " + path));
-                                    return 0;
-                                }
-                                ctx.getSource().sendFeedback(Text.literal("Converted floors config: " + path));
-                                return 1;
-                            })
-                            .then(ClientCommandManager.argument("name", StringArgumentType.greedyString())
-                                .executes(ctx -> {
-                                    String path = ctx.getArgument("path", String.class);
-                                    String name = ctx.getArgument("name", String.class);
-                                    boolean converted = FmeManager.convertFloorsConfig(path, name);
-                                    if (!converted) {
-                                        ctx.getSource().sendError(Text.literal(
-                                            "Failed to convert floors config: " + path + " -> " + name
-                                        ));
-                                        return 0;
-                                    }
-                                    ctx.getSource().sendFeedback(Text.literal(
-                                        "Converted floors config: " + path + " -> " + name
-                                    ));
-                                    return 1;
-                                }))))
                 .then(ClientCommandManager.literal("worldedit")
                     .then(ClientCommandManager.literal("pos1")
                         .executes(ctx -> executeWorldEditPosCurrent(ctx.getSource(), 1))
@@ -486,41 +420,6 @@ public final class HatClientMod implements ClientModInitializer {
                                     ctx.getArgument("from", Identifier.class).toString(),
                                     ctx.getArgument("to", Identifier.class).toString()
                                 ))))))
-                .then(ClientCommandManager.literal("offset")
-                    .executes(ctx -> {
-                        BlockPos offset = FmeManager.getOffset();
-                        ctx.getSource().sendFeedback(Text.literal("FME offset set to " + offset));
-                        return 1;
-                    })
-                    .then(ClientCommandManager.literal("here")
-                        .executes(ctx -> {
-                            MinecraftClient client = MinecraftClient.getInstance();
-                            if (client.player == null) {
-                                ctx.getSource().sendError(Text.literal("No player found."));
-                                return 0;
-                            }
-                            FmeManager.setOffset(client.player.getBlockPos());
-                            ctx.getSource().sendFeedback(Text.literal("FME offset set to " + client.player.getBlockPos()));
-                            return 1;
-                        }))
-                    .then(ClientCommandManager.literal("set")
-                        .then(ClientCommandManager.argument("x", IntegerArgumentType.integer())
-                            .then(ClientCommandManager.argument("y", IntegerArgumentType.integer())
-                                .then(ClientCommandManager.argument("z", IntegerArgumentType.integer())
-                                    .executes(ctx -> {
-                                        int x = IntegerArgumentType.getInteger(ctx, "x");
-                                        int y = IntegerArgumentType.getInteger(ctx, "y");
-                                        int z = IntegerArgumentType.getInteger(ctx, "z");
-                                        FmeManager.setOffset(x, y, z);
-                                        ctx.getSource().sendFeedback(Text.literal("FME offset set to " + new BlockPos(x, y, z)));
-                                        return 1;
-                                    })))))
-                    .then(ClientCommandManager.literal("reset")
-                        .executes(ctx -> {
-                            FmeManager.clearOffset();
-                            ctx.getSource().sendFeedback(Text.literal("FME offset reset to (0, 0, 0)."));
-                            return 1;
-                        })))
                 .then(ClientCommandManager.literal("replace")
                     .then(ClientCommandManager.argument("from", IdentifierArgumentType.identifier())
                         .suggests((ctx, builder) -> CommandSource.suggestIdentifiers(Registries.BLOCK.getIds(), builder))

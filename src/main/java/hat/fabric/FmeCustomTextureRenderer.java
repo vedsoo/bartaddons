@@ -158,7 +158,7 @@ public final class FmeCustomTextureRenderer {
                                float nx, float ny, float nz) {
         vc.vertex(mat, x, y, z)
             .color(color, color, color, alpha)
-            .texture(u, v)
+            .texture(1.0f - u, v)
             .overlay(OverlayTexture.DEFAULT_UV)
             .light(light)
             .normal(entry, nx, ny, nz);

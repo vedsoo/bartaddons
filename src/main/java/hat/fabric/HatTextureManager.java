@@ -183,7 +183,7 @@ public final class HatTextureManager {
                 .filter(Files::isRegularFile)
                 .filter(path -> {
                     String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
-                    return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg");
+                    return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".gif");
                 })
                 .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase(Locale.ROOT)))
                 .forEach(entries::add);
@@ -238,7 +238,7 @@ public final class HatTextureManager {
                 .filter(Files::isRegularFile)
                 .filter(path -> {
                     String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
-                    return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg");
+                    return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".gif");
                 })
                 .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase(Locale.ROOT)))
                 .findFirst();
