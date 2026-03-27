@@ -35,8 +35,8 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     companion object {
         private const val BASE_PANEL_WIDTH = 640
         private const val BASE_PANEL_HEIGHT = 360
-        private const val BASE_CELL_WIDTH = 36
-        private const val BASE_CELL_HEIGHT = 36
+        private const val BASE_CELL_WIDTH = 32
+        private const val BASE_CELL_HEIGHT = 32
         private const val BASE_GAP = 6
         private const val BASE_TAB_HEIGHT = 24
         private const val BASE_FIELD_HEIGHT = 18
@@ -98,9 +98,6 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     private var settingsY = 0
     private var prevX = 0
     private var nextX = 0
-    private var closeX = 0
-    private var closeY = 0
-    private var closeSize = 0
     private var uiScale = 1f
     private var openTimeMs = 0L
 
@@ -124,7 +121,7 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val fieldHeight = max(BASE_FIELD_HEIGHT.toFloat(), (textRenderer.fontHeight + 4) * scale).roundToInt()
         searchHeight = fieldHeight + max(2, (2 * scale).roundToInt())
         searchTextOffsetX = max(2, (2 * scale).roundToInt())
-        searchTextOffsetY = max(4, (4 * scale).roundToInt())
+        searchTextOffsetY = max(5, (5 * scale).roundToInt())
         val pagerHeight = (BASE_PAGER_HEIGHT * scale).roundToInt()
         val pagerWidth = (BASE_PAGER_WIDTH * scale).roundToInt()
 
@@ -135,10 +132,6 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val tabsOffset = max(3, (6 * scale).roundToInt())
         tabsY = headerY + tabsOffset
         pagerY = panelBottom - gap - pagerHeight
-
-        closeSize = max(10, (10 * scale).roundToInt())
-        closeX = panelRight - gap - closeSize
-        closeY = headerY
 
         sidebarWidth = (BASE_SIDEBAR_WIDTH * scale).roundToInt()
         sidebarX = panelX + gap
@@ -156,7 +149,7 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val availableGridHeight = pagerY - gap - gridY
         gridRows = max(1, availableGridHeight / (cellHeight + rowGap))
         entriesPerPage = max(1, gridColumns * gridRows)
-        searchWidth = max(80, panelRight - gap - searchX - closeSize - gap)
+        searchWidth = max(80, panelRight - gap - searchX)
         searchField = TextFieldWidget(
             textRenderer,
             searchX + searchTextOffsetX,
@@ -209,9 +202,6 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         drawPanelBackground(context, panelColor, borderColor, innerPanelColor, sidebarColor)
         drawSearchFieldBackground(context, panelColor, borderColor)
 
-        val closeColor = if (isOverClose(mouseX.toDouble(), mouseY.toDouble())) accentColor else mutedColor
-        context.drawText(textRenderer, Text.literal("x"), closeX, closeY, closeColor, false)
-
         drawGrid(context, mouseX, mouseY, textColor, mutedColor, accentColor, selectionColor)
         drawPager(context, textColor, mutedColor, accentColor)
 
@@ -232,10 +222,6 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             return searchField.mouseClicked(click, doubleClick)
         }
         searchField.setFocused(false)
-        if (isOverClose(mouseX, mouseY)) {
-            close()
-            return true
-        }
         for (button in tabButtons) {
             if (button.mouseClicked(click, doubleClick)) {
                 return true
@@ -369,6 +355,7 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             return
         }
 
+        var hoveredTooltip: Text? = null
         for (i in 0 until entriesPerPage) {
             val idx = page * entriesPerPage + i
             val col = i % gridColumns
@@ -394,6 +381,9 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
                 val label = trimToWidth(name, cellWidth - 12)
                 val labelY = y + max(0, (cellHeight - textRenderer.fontHeight) / 2)
                 context.drawText(textRenderer, Text.literal(label), x + 8, labelY, textColor, false)
+                if (hovered) {
+                    hoveredTooltip = Text.literal(name)
+                }
                 continue
             }
 
@@ -406,15 +396,21 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             drawCell(context, x, y, bg, border)
             val item = block.asItem()
             val hasItem = item != Items.AIR
-            val iconSize = max(12, minOf(24, cellHeight - 10))
-            val iconX = x + max(2, (cellWidth - iconSize) / 2) - 1
-            val iconY = y + max(2, (cellHeight - iconSize) / 2) + 1
+            val iconSize = 16
+            val iconX = x + max(0, (cellWidth - iconSize) / 2)
+            val iconY = y + max(0, (cellHeight - iconSize) / 2)
             if (hasItem) {
                 context.drawItem(ItemStack(item), iconX, iconY)
             }
             if (FmeManager.isFavorite(block)) {
                 drawFavoriteStar(context, x, y, accentColor)
             }
+            if (hovered) {
+                hoveredTooltip = Text.literal(block.name.string)
+            }
+        }
+        if (hoveredTooltip != null) {
+            drawThemedTooltip(context, hoveredTooltip, mouseX, mouseY, textColor, panelColor(), accentColor)
         }
 
     }
@@ -464,6 +460,40 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val sx = x + cellWidth - textRenderer.getWidth(star) - 4
         val sy = y + 2
         context.drawText(textRenderer, Text.literal(star), sx, sy, color, false)
+    }
+
+    private fun drawThemedTooltip(
+        context: DrawContext,
+        text: Text,
+        mouseX: Int,
+        mouseY: Int,
+        textColor: Int,
+        panelColor: Int,
+        accentColor: Int
+    ) {
+        val paddingX = max(4, (4 * uiScale).roundToInt())
+        val paddingY = max(3, (3 * uiScale).roundToInt())
+        val maxWidth = (width - 20).coerceAtLeast(40)
+        val textStr = text.string
+        val tooltipText = Text.literal(trimToWidth(textStr, maxWidth - paddingX * 2))
+        val textWidth = textRenderer.getWidth(tooltipText)
+        val textHeight = textRenderer.fontHeight
+        val boxW = textWidth + paddingX * 2
+        val boxH = textHeight + paddingY * 2
+        val radius = max(3, (6 * uiScale).roundToInt())
+        val bg = withAlpha(mixColor(panelColor, 0xFF000000.toInt(), 0.45f), 235)
+        val border = mixColor(accentColor, panelColor, 0.55f)
+
+        var x = mouseX + 10
+        var y = mouseY + 10
+        if (x + boxW > width - 6) {
+            x = width - boxW - 6
+        }
+        if (y + boxH > height - 6) {
+            y = height - boxH - 6
+        }
+        drawRoundedRect(context, x, y, boxW, boxH, bg, border, radius)
+        context.drawText(textRenderer, tooltipText, x + paddingX, y + paddingY, textColor, false)
     }
 
     private fun handleGridClick(mouseX: Double, mouseY: Double, button: Int): Boolean {
@@ -665,10 +695,6 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         client.soundManager.play(PositionedSoundInstance.master(SoundEvent.of(CLOSE_SOUND_ID), 1.0f))
     }
 
-    private fun isOverClose(mouseX: Double, mouseY: Double): Boolean {
-        return isInRect(mouseX, mouseY, closeX, closeY, closeSize + 4, closeSize + 4)
-    }
-
     private fun isInRect(mouseX: Double, mouseY: Double, x: Int, y: Int, w: Int, h: Int): Boolean {
         return mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h
     }
@@ -766,9 +792,10 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             val border = mixColor(textColor, panelColor, 0.75f)
             drawRoundedRect(context, x, y, width, height, bg, border, max(3, (6 * uiScale).roundToInt()))
 
-            val labelX = x + 8
+            val rawLabel = label.lowercase(Locale.ROOT).replaceFirstChar { it.titlecase(Locale.ROOT) }
+            val labelText = trimToWidth(rawLabel, width - 12)
+            val labelX = x + max(0, (width - textRenderer.getWidth(labelText)) / 2)
             val labelY = y + max(0, (height - textRenderer.fontHeight) / 2)
-            val labelText = trimToWidth(label.lowercase(Locale.ROOT), width - 12)
             val labelColor = if (activeTab) textColor else mixColor(textColor, panelColor, 0.55f)
             context.drawText(textRenderer, Text.literal(labelText), labelX, labelY, labelColor, false)
         }

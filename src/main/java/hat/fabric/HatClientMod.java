@@ -124,34 +124,6 @@ public final class HatClientMod implements ClientModInitializer {
             BlockPos hitPos = hitResult.getBlockPos();
             BlockState hitState = world.getBlockState(hitPos);
 
-            if (player != null && player.isSneaking()) {
-                BlockPos placePos = null;
-                Direction placeSide = null;
-                if (!hitState.isAir() || FmeManager.isAirGhostPosition(hitPos)) {
-                    placePos = hitPos.offset(hitResult.getSide());
-                    placeSide = hitResult.getSide();
-                }
-                if (placePos == null) {
-                    GhostHit ghostHit = findGhostHit(MinecraftClient.getInstance(), 6.0);
-                    if (ghostHit != null) {
-                        placePos = ghostHit.pos().offset(ghostHit.side());
-                        placeSide = ghostHit.side();
-                    }
-                }
-                if (placePos == null || placeSide == null) {
-                    return ActionResult.PASS;
-                }
-                BlockState placeState = world.getBlockState(placePos);
-                if (placeState.isAir()) {
-                    if (FmeManager.applyReplacement(placePos.toImmutable(), Blocks.AIR)) {
-                        FmeManager.sendClientMessage(
-                            "Placed ghost block using " + selectedSourceLabel()
-                        );
-                    }
-                }
-                return ActionResult.PASS;
-            }
-
             if (hitState.isAir()) {
                 return ActionResult.PASS;
             }
