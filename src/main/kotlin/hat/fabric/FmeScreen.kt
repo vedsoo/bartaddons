@@ -374,7 +374,6 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             val y = gridY + row * (cellHeight + rowGap)
             val hovered = isInRect(mouseX.toDouble(), mouseY.toDouble(), x, y, cellWidth, cellHeight)
             if (idx >= count) {
-                drawCell(context, x, y, cellBg, cellBorder)
                 continue
             }
 
@@ -398,9 +397,6 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
                     val label = trimToWidth(name, cellWidth - 26)
                     context.drawText(textRenderer, Text.literal(label), x + 24, y + 6, textColor, false)
                 }
-                if (FmeManager.isCustomTextureFavorite(name)) {
-                    drawFavoriteStar(context, x, y, accentColor)
-                }
                 continue
             }
 
@@ -422,9 +418,6 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             if (cellWidth >= 60) {
                 val label = trimToWidth(block.name.string, cellWidth - 26)
                 context.drawText(textRenderer, Text.literal(label), x + 24, y + 6, textColor, false)
-            }
-            if (FmeManager.isFavorite(block)) {
-                drawFavoriteStar(context, x, y, accentColor)
             }
         }
 
@@ -803,6 +796,10 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
 
         override fun appendClickableNarrations(builder: NarrationMessageBuilder) {
             appendDefaultNarrations(builder)
+        }
+
+        override fun playDownSound(soundManager: SoundManager) {
+            // Use custom tab sound only.
         }
     }
 
