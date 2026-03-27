@@ -56,11 +56,11 @@ public final class FmeManager {
     private static int selectedRotation = 0;
     private static int openScreenInTicks = -1;
     private static ScreenMode openScreenMode = ScreenMode.DEFAULT;
-    private static int guiPanelColor = 0xFF1A120B;
-    private static int guiBorderColor = 0xFF7A3A12;
-    private static int guiTextColor = 0xFFFFE3C2;
-    private static int guiAccentTextColor = 0xFFFF8A2B;
-    private static int selectionBoxColor = 0x66FF8A2B;
+    private static int guiPanelColor = 0xFF1B1024;
+    private static int guiBorderColor = 0xFF3A2155;
+    private static int guiTextColor = 0xFFD7CFE6;
+    private static int guiAccentTextColor = 0xFFC59BFF;
+    private static int selectionBoxColor = 0x663A2155;
     private static float guiScale = 1.5f;
     private static float guiBlockBrightness = 2.0f;
     private static boolean autoSaveEnabled = true;
@@ -565,8 +565,9 @@ public final class FmeManager {
     public static void sendClientMessage(String message) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player != null) {
-            MutableText prefix = Text.literal("[FME] ").formatted(Formatting.GREEN);
-            client.player.sendMessage(prefix.append(Text.literal(message)), false);
+            MutableText prefix = Text.literal("[FME] ").formatted(Formatting.LIGHT_PURPLE);
+            MutableText body = Text.literal(message).formatted(Formatting.WHITE);
+            client.player.sendMessage(prefix.append(body), false);
         }
     }
 
@@ -1041,10 +1042,10 @@ public final class FmeManager {
             selectedSourceType = SelectedSourceType.BLOCK;
             selectedCustomTexture = null;
             selectedRotation = 0;
-            guiPanelColor = 0xFF1A120B;
-            guiBorderColor = 0xFF7A3A12;
-            guiTextColor = 0xFFFFE3C2;
-            guiAccentTextColor = 0xFFFF8A2B;
+            guiPanelColor = 0xFF1B1024;
+            guiBorderColor = 0xFF3A2155;
+            guiTextColor = 0xFFD7CFE6;
+            guiAccentTextColor = 0xFFC59BFF;
             selectionBoxColor = 0x66FF8A2B;
             guiScale = 1.5f;
             guiBlockBrightness = 2.0f;

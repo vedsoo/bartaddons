@@ -1,0 +1,3 @@
+[submodule "NVGRenderer"]
+	path = NVGRenderer
+	url = https://github.com/Noamm9/NVGRenderer.git

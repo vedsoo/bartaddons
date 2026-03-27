@@ -13,6 +13,7 @@ base {
 
 repositories {
     mavenCentral()
+    maven { url "https://jitpack.io" }
 }
 
 dependencies {
@@ -21,6 +22,8 @@ dependencies {
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
     modImplementation "net.fabricmc:fabric-language-kotlin:${project.fabric_language_kotlin_version}"
+    modImplementation "com.github.noamm9:NvgRenderer:1.0"
+    include "com.github.noamm9:NvgRenderer:1.0"
 }
 
 processResources {

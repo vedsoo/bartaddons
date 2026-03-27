@@ -37,6 +37,7 @@ build/
 run/
 logs/
 *.log
+.tmp_mappings/
 
 ### Embedded repos / local folders ###
 Athen/

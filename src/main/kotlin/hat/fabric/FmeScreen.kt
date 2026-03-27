@@ -1,5 +1,8 @@
 package hat.fabric
 
+import com.github.noamm9.nvgrenderer.nvg.Gradient
+import com.github.noamm9.nvgrenderer.nvg.NVG
+import com.github.noamm9.nvgrenderer.nvg.PIPNVG
 import net.minecraft.block.Block
 import net.minecraft.client.MinecraftClient
 import net.minecraft.client.gui.DrawContext
@@ -8,9 +11,9 @@ import net.minecraft.client.gui.screen.Screen
 import net.minecraft.client.gui.screen.narration.NarrationMessageBuilder
 import net.minecraft.client.gui.widget.ClickableWidget
 import net.minecraft.client.gui.widget.TextFieldWidget
-import net.minecraft.client.gl.RenderPipelines
 import net.minecraft.client.sound.PositionedSoundInstance
 import net.minecraft.client.sound.SoundManager
+import net.minecraft.client.input.CharInput
 import net.minecraft.client.input.KeyInput
 import net.minecraft.item.ItemStack
 import net.minecraft.item.Items
@@ -21,6 +24,7 @@ import net.minecraft.util.Identifier
 import net.minecraft.util.math.MathHelper
 import org.lwjgl.glfw.GLFW
 import java.nio.file.Path
+import java.awt.Color
 import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.max
@@ -31,12 +35,12 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     companion object {
         private const val BASE_PANEL_WIDTH = 640
         private const val BASE_PANEL_HEIGHT = 360
-        private const val BASE_CELL_WIDTH = 46
-        private const val BASE_CELL_HEIGHT = 24
+        private const val BASE_CELL_WIDTH = 36
+        private const val BASE_CELL_HEIGHT = 36
         private const val BASE_GAP = 6
-        private const val BASE_TAB_HEIGHT = 28
+        private const val BASE_TAB_HEIGHT = 24
         private const val BASE_FIELD_HEIGHT = 18
-        private const val BASE_SIDEBAR_WIDTH = 110
+        private const val BASE_SIDEBAR_WIDTH = 120
         private const val BASE_BUTTON_HEIGHT = 20
         private const val BASE_PAGER_WIDTH = 70
         private const val BASE_PAGER_HEIGHT = 18
@@ -80,8 +84,7 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     private var sidebarWidth = 0
     private var sidebarX = 0
     private var contentX = 0
-    private var titleY = 0
-    private var subtitleY = 0
+    private var headerY = 0
     private var searchY = 0
     private var tabsY = 0
     private var gridX = 0
@@ -116,9 +119,8 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
 
         val gap = (BASE_GAP * scale).roundToInt()
         val tabHeight = (BASE_TAB_HEIGHT * scale).roundToInt()
-        val tabOffset = max(2, (3 * scale).roundToInt())
-
         val fieldHeight = max(BASE_FIELD_HEIGHT.toFloat(), (textRenderer.fontHeight + 4) * scale).roundToInt()
+        val searchHeight = fieldHeight + max(2, (2 * scale).roundToInt())
         val buttonHeight = (BASE_BUTTON_HEIGHT * scale).roundToInt()
         val pagerHeight = (BASE_PAGER_HEIGHT * scale).roundToInt()
         val pagerWidth = (BASE_PAGER_WIDTH * scale).roundToInt()
@@ -126,61 +128,45 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val panelRight = panelX + panelWidth
         val panelBottom = panelY + panelHeight
 
-        titleY = panelY + gap
-        subtitleY = titleY + textRenderer.fontHeight + (gap / 2)
-        tabsY = subtitleY + textRenderer.fontHeight + max(2, (gap / 2))
+        headerY = panelY + gap
+        val tabsOffset = max(3, (6 * scale).roundToInt())
+        tabsY = headerY + tabsOffset
         pagerY = panelBottom - gap - pagerHeight
 
         closeSize = max(10, (10 * scale).roundToInt())
         closeX = panelRight - gap - closeSize
-        closeY = titleY
+        closeY = headerY
 
+        sidebarWidth = (BASE_SIDEBAR_WIDTH * scale).roundToInt()
         sidebarX = panelX + gap
-        contentX = panelX + gap
-        gridX = contentX
+        contentX = sidebarX + sidebarWidth + gap
         val gridWidth = panelRight - gap - contentX
         gridColumns = max(1, gridWidth / (cellWidth + colGap))
+        val actualGridWidth = gridColumns * cellWidth + max(0, gridColumns - 1) * colGap
+        gridX = contentX + max(0, (gridWidth - actualGridWidth) / 2)
 
-        val minTabWidth = 32
-        val minTabGap = max(2, (2 * uiScale).roundToInt())
-        val minTabsTotal = (minTabWidth * 4) + (minTabGap * 3)
-        val desiredSearchWidth = 140.coerceAtLeast((panelWidth * 0.22f).roundToInt())
-        val maxSearchWidth = (panelRight - gap) - contentX - minTabsTotal - gap
-        val tabsStartY = tabsY + tabOffset
-        val placeSearchInline = maxSearchWidth >= 80
-        val searchWidth = if (placeSearchInline) {
-            max(40, desiredSearchWidth.coerceAtMost(max(40, maxSearchWidth)))
-        } else {
-            max(80, desiredSearchWidth.coerceAtMost(gridWidth))
-        }
-        val searchX = if (placeSearchInline) (panelRight - gap) - searchWidth else contentX
-        searchY = if (placeSearchInline) {
-            tabsStartY + max(0, (tabHeight - fieldHeight) / 2)
-        } else {
-            tabsY + tabHeight + gap
-        }
-        gridY = if (placeSearchInline) {
-            tabsY + tabHeight + gap
-        } else {
-            searchY + fieldHeight + gap
-        }
+        val searchX = contentX
+        searchY = headerY + max(0, (tabHeight - searchHeight) / 2)
+        gridY = headerY + tabHeight + gap
         val settingsOffset = max(6, (6 * scale).roundToInt())
         val settingsHeaderPadding = max(4, (4 * scale).roundToInt())
         settingsY = gridY + settingsOffset
         if (tab == Tab.SETTINGS) {
-            val minSettingsTop = tabsY + tabHeight + gap + textRenderer.fontHeight + settingsHeaderPadding
+            val minSettingsTop = headerY + tabHeight + gap + textRenderer.fontHeight + settingsHeaderPadding
             val settingsExtra = max(10, (18 * scale).roundToInt())
             settingsY = max(settingsY, minSettingsTop) + settingsExtra
         }
         val availableGridHeight = pagerY - gap - gridY
         gridRows = max(1, availableGridHeight / (cellHeight + rowGap))
         entriesPerPage = max(1, gridColumns * gridRows)
-        searchField = TextFieldWidget(textRenderer, searchX, searchY, max(40, searchWidth), fieldHeight, Text.literal("Search"))
+        val searchWidth = max(80, panelRight - gap - searchX - closeSize - gap)
+        searchField = TextFieldWidget(textRenderer, searchX, searchY, searchWidth, searchHeight, Text.literal("Search"))
         searchField.setPlaceholder(Text.literal("Search blocks and textures..."))
         searchField.setChangedListener { page = 0 }
         searchField.setDrawsBackground(false)
         addDrawableChild(searchField)
-        setInitialFocus(searchField)
+        searchField.visible = tab != Tab.SETTINGS
+        searchField.active = tab != Tab.SETTINGS
 
         val tabs = listOf(
             Triple("ALL", TAB_ICON_ALL, Tab.ALL),
@@ -188,32 +174,12 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             Triple("CUSTOM", TAB_ICON_CUSTOM, Tab.CUSTOM),
             Triple("SETTINGS", TAB_ICON_SETTINGS, Tab.SETTINGS)
         )
-        val desiredGap = max(6, (4 * uiScale).roundToInt())
-        var gapBetween = desiredGap
-        val availableTabWidth = if (placeSearchInline) searchX - contentX - gap else (panelRight - gap) - contentX
-        val desiredWidths = tabs.map { (label, _, _) ->
-            val textWidth = textRenderer.getWidth(label)
-            max(48, textWidth + TAB_ICON_SIZE + 18)
-        }
-        val desiredTotal = desiredWidths.sum() + desiredGap * (tabs.size - 1)
-        val tabWidths = if (desiredTotal <= availableTabWidth) {
-            desiredWidths
-        } else {
-            gapBetween = max(2, (2 * uiScale).roundToInt())
-            val remaining = (availableTabWidth - gapBetween * (tabs.size - 1)).coerceAtLeast(1)
-            val scaleFactor = remaining.toFloat() / desiredWidths.sum().toFloat()
-            val minWidth = 32
-            val scaled = desiredWidths.map { max(minWidth, (it * scaleFactor).roundToInt()) }.toMutableList()
-            if (scaled.size > 1) {
-                val used = scaled.dropLast(1).sum() + gapBetween * (scaled.size - 1)
-                scaled[scaled.lastIndex] = max(1, availableTabWidth - used)
-            }
-            scaled
-        }
-
-        var tabX = contentX
-        tabs.forEachIndexed { index, (label, icon, target) ->
-            tabX = addTabButton(tabX, tabsStartY, tabHeight, tabWidths[index], gapBetween, label, icon, target)
+        val tabGap = max(6, (4 * uiScale).roundToInt())
+        val tabWidth = sidebarWidth - gap * 2
+        var tabY = tabsY
+        tabs.forEach { (label, icon, target) ->
+            addTabButton(sidebarX + gap, tabY, tabHeight, tabWidth, tabGap, label, icon, target)
+            tabY += tabHeight + tabGap
         }
 
         prevX = panelRight - gap - pagerWidth * 2 - gap
@@ -241,19 +207,16 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val accentColor = multiplyAlpha(FmeManager.getGuiAccentTextColor(), anim)
         val selectionColor = multiplyAlpha(FmeManager.getSelectionBoxColor(), anim)
         val mutedColor = withAlpha(mixColor(textColor, panelColor, 0.55f), (textColor ushr 24) and 0xFF)
+        val innerPanelColor = mixColor(panelColor, 0xFF000000.toInt(), 0.12f)
+        val sidebarColor = mixColor(panelColor, 0xFF000000.toInt(), 0.18f)
 
-        context.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, panelColor)
-        drawBorder(context, panelX, panelY, panelWidth, panelHeight, borderColor)
+        drawPanelBackground(context, panelColor, borderColor, innerPanelColor, sidebarColor)
+        drawSearchFieldBackground(context, panelColor, borderColor)
 
-        context.drawText(textRenderer, Text.literal("FME"), contentX, titleY, textColor, false)
-        val subtitleMaxWidth = max(0, (panelX + panelWidth) - contentX - (BASE_GAP * uiScale).roundToInt())
-        val subtitle = trimToWidth(currentSelectionLabel(), subtitleMaxWidth)
-        context.drawText(textRenderer, Text.literal(subtitle), contentX, subtitleY, mutedColor, false)
         val closeColor = if (isOverClose(mouseX.toDouble(), mouseY.toDouble())) accentColor else mutedColor
         context.drawText(textRenderer, Text.literal("x"), closeX, closeY, closeColor, false)
 
         if (tab != Tab.SETTINGS) {
-            drawSearchFieldBackground(context, panelColor, borderColor)
             drawGrid(context, mouseX, mouseY, textColor, mutedColor, accentColor, selectionColor)
             drawPager(context, textColor, mutedColor, accentColor)
         }
@@ -270,6 +233,11 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val mouseX = click.x()
         val mouseY = click.y()
         val button = click.button()
+        if (searchField.visible && searchField.isMouseOver(mouseX, mouseY)) {
+            searchField.setFocused(true)
+            return searchField.mouseClicked(click, doubleClick)
+        }
+        searchField.setFocused(false)
         if (isOverClose(mouseX, mouseY)) {
             close()
             return true
@@ -303,11 +271,21 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     }
 
     override fun keyPressed(input: KeyInput): Boolean {
+        if (searchField.visible && searchField.isFocused && searchField.keyPressed(input)) {
+            return true
+        }
         if (input.getKeycode() == GLFW.GLFW_KEY_ESCAPE) {
             close()
             return true
         }
         return super.keyPressed(input)
+    }
+
+    override fun charTyped(input: CharInput): Boolean {
+        if (searchField.visible && searchField.isFocused && searchField.charTyped(input)) {
+            return true
+        }
+        return super.charTyped(input)
     }
 
     override fun shouldPause(): Boolean {
@@ -323,8 +301,40 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val w = searchField.width
         val h = searchField.height
         val bg = withAlpha(mixColor(panelColor, 0xFF000000.toInt(), 0.6f), 0xFF)
-        context.fill(x, y, x + w, y + h, bg)
-        drawBorder(context, x, y, w, h, borderColor)
+        drawRoundedRect(context, x, y, w, h, bg, borderColor, max(3, (6 * uiScale).roundToInt()))
+    }
+
+    private fun drawPanelBackground(
+        context: DrawContext,
+        panelColor: Int,
+        borderColor: Int,
+        innerPanelColor: Int,
+        sidebarColor: Int
+    ) {
+        val radius = max(6, (10 * uiScale).roundToInt())
+        val innerRadius = max(2, radius - 3)
+        val innerInset = 4
+        val innerX = panelX + innerInset
+        val innerY = panelY + innerInset
+        val innerW = panelWidth - innerInset * 2
+        val innerH = panelHeight - innerInset * 2
+        val sidebarBottom = panelY + panelHeight - (BASE_GAP * uiScale).roundToInt()
+        val sidebarH = max(0, sidebarBottom - headerY)
+
+        val gradientStart = Color(150, 105, 210, 235)
+        val gradientEnd = Color(20, 10, 34, 245)
+        val border = toAwtColor(borderColor)
+        val inner = toAwtColor(innerPanelColor, 170)
+        val sidebar = toAwtColor(sidebarColor, 155)
+
+        PIPNVG.drawNVG(context, 0, 0, width, height) {
+            NVG.gradientRect(panelX, panelY, panelWidth, panelHeight, gradientStart, gradientEnd, Gradient.TopToBottom, radius.toFloat())
+            NVG.hollowRect(panelX, panelY, panelWidth, panelHeight, 1f, border, radius.toFloat())
+            NVG.rect(innerX, innerY, innerW, innerH, inner, innerRadius.toFloat())
+            if (sidebarH > 0) {
+                NVG.rect(sidebarX, headerY, sidebarWidth, sidebarH, sidebar, 0f)
+            }
+        }
     }
 
     private fun drawGrid(
@@ -347,16 +357,16 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val isCustom = tab == Tab.CUSTOM
         val entriesBlocks = if (isCustom || tab == Tab.SETTINGS) emptyList() else visibleEntries()
         val entriesTextures = if (isCustom) visibleTextureEntries() else emptyList()
-        val cellBg = withAlpha(mixColor(textColor, panelColor(), 0.85f), 0xFF)
-        val cellBorder = withAlpha(mixColor(textColor, panelColor(), 0.7f), 0xFF)
-        val cellSelected = mixColor(selectionColor, panelColor(), 0.35f)
+        val cellBg = withAlpha(mixColor(panelColor(), 0xFF000000.toInt(), 0.18f), 0xFF)
+        val cellBorder = withAlpha(mixColor(textColor, panelColor(), 0.75f), 120)
+        val cellSelected = mixColor(selectionColor, panelColor(), 0.2f)
         val pulse = 0.15f * pulse01(900f)
 
         if (count == 0) {
             context.drawText(textRenderer, Text.literal(if (isCustom) "No custom textures found" else "No blocks found"),
                 gridX, gridY, mutedColor, false)
             if (isCustom) {
-                val info = "Drop PNGs into: ${HatTextureManager.getTextureDir()}"
+                val info = "Drop PNGs into: config/fme/custom_textures"
                 context.drawText(textRenderer, Text.literal(trimToWidth(info, panelWidth - (gridX - panelX) - 12)),
                     gridX, gridY + textRenderer.fontHeight + 4, mutedColor, false)
             }
@@ -385,18 +395,9 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
                 val bg = if (hovered) mixColor(baseBg, accentColor, 0.12f + pulse) else baseBg
                 val border = if (hovered) mixColor(cellBorder, accentColor, 0.25f + pulse) else cellBorder
                 drawCell(context, x, y, bg, border)
-                val texId = getCustomTextureId(path)
-                if (texId != null) {
-                    try {
-                        context.drawTexture(RenderPipelines.GUI_TEXTURED, texId, x + 4, y + 4, 0f, 0f, 16, 16, 16, 16)
-                    } catch (_: Throwable) {
-                        // Ignore texture draw errors.
-                    }
-                }
-                if (cellWidth >= 60) {
-                    val label = trimToWidth(name, cellWidth - 26)
-                    context.drawText(textRenderer, Text.literal(label), x + 24, y + 6, textColor, false)
-                }
+                val label = trimToWidth(name, cellWidth - 12)
+                val labelY = y + max(0, (cellHeight - textRenderer.fontHeight) / 2)
+                context.drawText(textRenderer, Text.literal(label), x + 8, labelY, textColor, false)
                 continue
             }
 
@@ -407,17 +408,16 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             val bg = if (hovered) mixColor(baseBg, accentColor, 0.12f + pulse) else baseBg
             val border = if (hovered) mixColor(cellBorder, accentColor, 0.25f + pulse) else cellBorder
             drawCell(context, x, y, bg, border)
-            val icon = ItemStack(block.asItem())
-            if (!icon.isEmpty && icon.item != Items.AIR) {
-                try {
-                    context.drawItem(icon, x + 4, y + 4)
-                } catch (_: Throwable) {
-                    // Ignore item render errors.
-                }
+            val item = block.asItem()
+            val hasItem = item != Items.AIR
+            val iconSize = max(12, minOf(24, cellHeight - 10))
+            val iconX = x + max(2, (cellWidth - iconSize) / 2) - 1
+            val iconY = y + max(2, (cellHeight - iconSize) / 2) + 1
+            if (hasItem) {
+                context.drawItem(ItemStack(item), iconX, iconY)
             }
-            if (cellWidth >= 60) {
-                val label = trimToWidth(block.name.string, cellWidth - 26)
-                context.drawText(textRenderer, Text.literal(label), x + 24, y + 6, textColor, false)
+            if (FmeManager.isFavorite(block)) {
+                drawFavoriteStar(context, x, y, accentColor)
             }
         }
 
@@ -459,8 +459,7 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     }
 
     private fun drawCell(context: DrawContext, x: Int, y: Int, bg: Int, border: Int) {
-        context.fill(x, y, x + cellWidth, y + cellHeight, bg)
-        drawBorder(context, x, y, cellWidth, cellHeight, border)
+        drawRoundedRect(context, x, y, cellWidth, cellHeight, bg, border, max(3, (6 * uiScale).roundToInt()))
     }
 
     private fun drawFavoriteStar(context: DrawContext, x: Int, y: Int, color: Int) {
@@ -568,6 +567,7 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val showSettings = tab == Tab.SETTINGS
         searchField.visible = !showSettings
         searchField.active = !showSettings
+        searchField.setFocused(!showSettings)
         settingsWidgets.forEach {
             it.visible = showSettings
             it.active = showSettings
@@ -588,7 +588,7 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         cellHeight = (BASE_CELL_HEIGHT * scale).roundToInt()
         colGap = max(2, (BASE_GAP * scale).roundToInt() / 2)
         rowGap = max(2, (BASE_GAP * scale).roundToInt() / 2)
-        sidebarWidth = 0
+        sidebarWidth = (BASE_SIDEBAR_WIDTH * scale).roundToInt()
 
         panelX = max(8, (width - panelWidth) / 2)
         panelY = max(8, (height - panelHeight) / 2)
@@ -668,6 +668,11 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         }
     }
 
+    private fun currentSelectionShort(): String {
+        val label = currentSelectionLabel()
+        return label.removePrefix("Selected: ").lowercase(Locale.ROOT)
+    }
+
     private fun toggleFme() {
         val enabled = FmeManager.toggleEnabled()
         fmeToggleButton.message = Text.literal("FME: " + if (enabled) "ON" else "OFF")
@@ -707,6 +712,21 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         context.fill(x, y + h - 1, x + w, y + h, color)
         context.fill(x, y, x + 1, y + h, color)
         context.fill(x + w - 1, y, x + w, y + h, color)
+    }
+
+    private fun drawRoundedRect(context: DrawContext, x: Int, y: Int, w: Int, h: Int, fill: Int, border: Int, radius: Int) {
+        PIPNVG.drawNVG(context, 0, 0, width, height) {
+            NVG.rect(x, y, w, h, toAwtColor(fill), radius.toFloat())
+            NVG.hollowRect(x, y, w, h, 1f, toAwtColor(border), radius.toFloat())
+        }
+    }
+
+    private fun toAwtColor(color: Int, alphaOverride: Int? = null): Color {
+        val a = alphaOverride ?: ((color ushr 24) and 0xFF)
+        val r = (color ushr 16) and 0xFF
+        val g = (color ushr 8) and 0xFF
+        val b = color and 0xFF
+        return Color(r, g, b, a.coerceIn(0, 255))
     }
 
 
@@ -771,20 +791,18 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             val panelColor = panelColor()
             val textColor = FmeManager.getGuiTextColor()
             val accentColor = FmeManager.getGuiAccentTextColor()
-            val pulse = if (activeTab || isHovered) 0.12f * pulse01(900f) else 0f
-            val bg = mixColor(panelColor, 0xFF000000.toInt(), 0.35f + pulse)
-            val border = if (activeTab) accentColor else mixColor(textColor, panelColor, 0.75f)
-            context.fill(x, y, x + width, y + height, bg)
-            drawBorder(context, x, y, width, height, border)
+            val pulse = if (activeTab || isHovered) 0.1f * pulse01(900f) else 0f
+            val base = mixColor(panelColor, 0xFF000000.toInt(), 0.2f)
+            val active = mixColor(panelColor, accentColor, 0.2f + pulse)
+            val bg = if (activeTab || isHovered) active else base
+            val border = mixColor(textColor, panelColor, 0.75f)
+            drawRoundedRect(context, x, y, width, height, bg, border, max(3, (6 * uiScale).roundToInt()))
 
-            val iconX = x + 6
-            val iconY = y + max(0, (height - TAB_ICON_SIZE) / 2)
-            context.drawTexture(RenderPipelines.GUI_TEXTURED, icon, iconX, iconY, 0f, 0f, TAB_ICON_SIZE, TAB_ICON_SIZE, TAB_ICON_SIZE, TAB_ICON_SIZE)
-
-            val labelX = iconX + TAB_ICON_SIZE + 6
+            val labelX = x + 8
             val labelY = y + max(0, (height - textRenderer.fontHeight) / 2)
-            val labelText = trimToWidth(label, width - (labelX - x) - 6)
-            context.drawText(textRenderer, Text.literal(labelText), labelX, labelY, textColor, false)
+            val labelText = trimToWidth(label.lowercase(Locale.ROOT), width - 12)
+            val labelColor = if (activeTab) textColor else mixColor(textColor, panelColor, 0.55f)
+            context.drawText(textRenderer, Text.literal(labelText), labelX, labelY, labelColor, false)
         }
 
         override fun onClick(click: Click, doubleClick: Boolean) {
