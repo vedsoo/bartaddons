@@ -9,12 +9,15 @@ import net.minecraft.client.gui.DrawContext
 import net.minecraft.client.gui.Click
 import net.minecraft.client.gui.screen.Screen
 import net.minecraft.client.gui.screen.narration.NarrationMessageBuilder
+import net.minecraft.client.gui.widget.ButtonWidget
 import net.minecraft.client.gui.widget.ClickableWidget
+import net.minecraft.client.gui.widget.SliderWidget
 import net.minecraft.client.gui.widget.TextFieldWidget
 import net.minecraft.client.sound.PositionedSoundInstance
 import net.minecraft.client.sound.SoundManager
 import net.minecraft.client.input.CharInput
 import net.minecraft.client.input.KeyInput
+import net.minecraft.client.gl.RenderPipelines
 import net.minecraft.item.ItemStack
 import net.minecraft.item.Items
 import net.minecraft.registry.Registries
@@ -44,6 +47,8 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         private const val BASE_BUTTON_HEIGHT = 20
         private const val BASE_PAGER_WIDTH = 70
         private const val BASE_PAGER_HEIGHT = 18
+        private const val BASE_SUB_TAB_HEIGHT = 18
+        private const val PAGE_ANIM_MS = 140L
         private const val TAB_ICON_SIZE = 16
 
         private val TAB_CLICK_SOUND_ID = Identifier.of("hat", "ui.click")
@@ -52,21 +57,49 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         private val TAB_ICON_ALL = Identifier.of("hat", "textures/gui/tabs/all.png")
         private val TAB_ICON_FAVORITES = Identifier.of("hat", "textures/gui/tabs/favorites.png")
         private val TAB_ICON_CUSTOM = Identifier.of("hat", "textures/gui/tabs/custom.png")
+        private val TAB_ICON_CONFIGS = Identifier.of("hat", "textures/gui/tabs/configs.png")
+        private val TAB_ICON_THEMES = Identifier.of("hat", "textures/gui/tabs/themes.png")
+        private val TAB_ICON_OTHER = Identifier.of("hat", "textures/gui/tabs/configs.png")
+        private const val NEW_CUSTOM_THEME_LABEL = "+ New Theme"
     }
 
     private enum class Tab {
         ALL,
         FAVORITES,
+        CUSTOM,
+        OTHER,
+        CONFIGS,
+        THEMES
+    }
+
+    private enum class ThemeSubTab {
+        THEMES,
         CUSTOM
     }
 
     private val allBlocks = mutableListOf<Block>()
     private val textureFiles = mutableListOf<Path>()
+    private val configNames = mutableListOf<String>()
+    private val themeNames = mutableListOf<String>()
+    private val customThemeNames = mutableListOf<String>()
+    private val otherEntries = mutableListOf<OtherEntry>()
     private val customTextureCache = mutableMapOf<Path, Identifier>()
     private val customTextureFailed = mutableSetOf<Path>()
     private val tabButtons = mutableListOf<TabButton>()
+    private val themeSubTabButtons = mutableListOf<ThemeSubTabButton>()
+    private var tabsWidget: TabsWidget? = null
+    private var blockGridWidget: BlockGridWidget? = null
     private var tab = Tab.ALL
+    private var themeSubTab = ThemeSubTab.THEMES
+    private var customThemeEditing = false
+    private var customThemeDraft: FmeManager.CustomTheme? = null
+    private var customThemeNameField: TextFieldWidget? = null
+    private val customThemeWidgets = mutableListOf<ClickableWidget>()
     private var page = 0
+    private var animFromPage = 0f
+    private var animToPage = 0
+    private var animStartMs = 0L
+    private var animating = false
     private var textureLoadBudget = 0
     private lateinit var searchField: TextFieldWidget
 
@@ -80,6 +113,9 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     private var rowGap = 0
     private var sidebarWidth = 0
     private var sidebarX = 0
+    private var sidebarBottom = 0
+    private var tabsEndY = 0
+    private var tabsGap = 0
     private var contentX = 0
     private var headerY = 0
     private var searchY = 0
@@ -89,17 +125,24 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     private var searchTextOffsetX = 0
     private var searchTextOffsetY = 0
     private var tabsY = 0
+    private var baseGridY = 0
     private var gridX = 0
     private var gridY = 0
     private var gridColumns = 0
     private var gridRows = 0
     private var entriesPerPage = 0
+    private var gridAreaWidth = 0
+    private var baseCellWidth = 0
+    private var baseGridColumns = 0
     private var pagerY = 0
     private var settingsY = 0
     private var prevX = 0
     private var nextX = 0
     private var uiScale = 1f
     private var openTimeMs = 0L
+    private var themeSubTabsY = 0
+    private var themeSubTabHeight = 0
+    private var themeSubTabGap = 0
 
     override fun init() {
         openTimeMs = System.currentTimeMillis()
@@ -135,19 +178,28 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
 
         sidebarWidth = (BASE_SIDEBAR_WIDTH * scale).roundToInt()
         sidebarX = panelX + gap
+        sidebarBottom = panelBottom - gap
         contentX = sidebarX + sidebarWidth + gap
         val gridWidth = panelRight - gap - contentX
+        gridAreaWidth = gridWidth
         gridColumns = max(1, gridWidth / (cellWidth + colGap))
         val actualGridWidth = gridColumns * cellWidth + max(0, gridColumns - 1) * colGap
         gridX = contentX + max(0, (gridWidth - actualGridWidth) / 2)
+        baseCellWidth = cellWidth
+        baseGridColumns = gridColumns
 
         searchX = contentX
         searchY = headerY + max(0, (tabHeight - searchHeight) / 2)
         gridY = headerY + tabHeight + gap
+        baseGridY = gridY
+        themeSubTabsY = baseGridY
+        themeSubTabHeight = max(14, (BASE_SUB_TAB_HEIGHT * scale).roundToInt())
+        themeSubTabGap = max(4, (4 * scale).roundToInt())
         val settingsOffset = max(6, (6 * scale).roundToInt())
         settingsY = gridY + settingsOffset
         val availableGridHeight = pagerY - gap - gridY
         gridRows = max(1, availableGridHeight / (cellHeight + rowGap))
+        applyGridLayoutForTab()
         entriesPerPage = max(1, gridColumns * gridRows)
         searchWidth = max(80, panelRight - gap - searchX)
         searchField = TextFieldWidget(
@@ -159,28 +211,59 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             Text.literal("Search")
         )
         searchField.setPlaceholder(Text.literal("Search blocks and textures..."))
-        searchField.setChangedListener { page = 0 }
+        searchField.setChangedListener { setPage(0, 1, false) }
         searchField.setDrawsBackground(false)
         addDrawableChild(searchField)
         searchField.visible = true
         searchField.active = true
 
+        customThemeWidgets.clear()
+        customThemeNameField = null
+        if (customThemeEditing) {
+            initCustomThemeEditorWidgets()
+        }
+
+        themeSubTabButtons.clear()
+        val subTabWidth = max(60, (gridAreaWidth - themeSubTabGap) / 2)
+        val subTabX = contentX
+        addThemeSubTabButton(subTabX, themeSubTabsY, subTabWidth, themeSubTabHeight, "Themes", ThemeSubTab.THEMES)
+        addThemeSubTabButton(
+            subTabX + subTabWidth + themeSubTabGap,
+            themeSubTabsY,
+            subTabWidth,
+            themeSubTabHeight,
+            "Custom",
+            ThemeSubTab.CUSTOM
+        )
+
         val tabs = listOf(
             Triple("ALL", TAB_ICON_ALL, Tab.ALL),
             Triple("FAVORITES", TAB_ICON_FAVORITES, Tab.FAVORITES),
-            Triple("CUSTOM", TAB_ICON_CUSTOM, Tab.CUSTOM)
+            Triple("CUSTOM", TAB_ICON_CUSTOM, Tab.CUSTOM),
+            Triple("OTHER", TAB_ICON_OTHER, Tab.OTHER),
+            Triple("CONFIGS", TAB_ICON_CONFIGS, Tab.CONFIGS),
+            Triple("THEMES", TAB_ICON_THEMES, Tab.THEMES)
         )
         val tabGap = max(6, (4 * uiScale).roundToInt())
-        val tabWidth = sidebarWidth - gap * 2
-        var tabY = tabsY
-        tabs.forEach { (label, icon, target) ->
-            addTabButton(sidebarX + gap, tabY, tabHeight, tabWidth, tabGap, label, icon, target)
-            tabY += tabHeight + tabGap
+        tabsGap = tabGap
+        tabsWidget = TabsWidget(
+            x = sidebarX + gap,
+            y = tabsY,
+            width = sidebarWidth - gap * 2,
+            tabHeight = tabHeight,
+            gapBetween = tabGap,
+            tabs = tabs
+        )
+        tabsWidget?.apply {
+            initButtons()
+            tabsEndY = endY
         }
+        blockGridWidget = BlockGridWidget()
 
         prevX = panelRight - gap - pagerWidth * 2 - gap
         nextX = panelRight - gap - pagerWidth
 
+        applyThemeSubTabLayout()
         updateTabState()
     }
 
@@ -199,7 +282,11 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val innerPanelColor = mixColor(panelColor, 0xFF000000.toInt(), 0.12f)
         val sidebarColor = mixColor(panelColor, 0xFF000000.toInt(), 0.18f)
 
+        searchField.setEditableColor(textColor)
+        searchField.setUneditableColor(mutedColor)
+
         drawPanelBackground(context, panelColor, borderColor, innerPanelColor, sidebarColor)
+        drawSidebarBranding(context)
         drawSearchFieldBackground(context, panelColor, borderColor)
 
         drawGrid(context, mouseX, mouseY, textColor, mutedColor, accentColor, selectionColor)
@@ -217,6 +304,9 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val mouseX = click.x()
         val mouseY = click.y()
         val button = click.button()
+        if (!isInRect(mouseX.toDouble(), mouseY.toDouble(), panelX, panelY, panelWidth, panelHeight)) {
+            return true
+        }
         if (searchField.visible && searchField.isMouseOver(mouseX, mouseY)) {
             searchField.setFocused(true)
             return searchField.mouseClicked(click, doubleClick)
@@ -227,7 +317,19 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
                 return true
             }
         }
-        if (handleGridClick(mouseX, mouseY, button)) {
+        for (button in themeSubTabButtons) {
+            if (button.mouseClicked(click, doubleClick)) {
+                return true
+            }
+        }
+        if (customThemeEditing) {
+            return super.mouseClicked(click, doubleClick)
+        }
+        if (isInRect(mouseX.toDouble(), mouseY.toDouble(), sidebarX, headerY, sidebarWidth, sidebarBottom - headerY)
+            && mouseY >= tabsEndY + tabsGap) {
+            return true
+        }
+        if (blockGridWidget?.handleGridClick(mouseX, mouseY, button) == true) {
             return true
         }
         if (handlePagerClick(mouseX, mouseY, button)) {
@@ -237,13 +339,16 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, horizontalAmount: Double, verticalAmount: Double): Boolean {
+        if (customThemeEditing) {
+            return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount)
+        }
         val count = entriesCount()
         if (count <= 0 || entriesPerPage <= 0) {
             return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount)
         }
         val maxPages = max(1, ceil(count / entriesPerPage.toDouble()).toInt())
         val direction = if (verticalAmount < 0) 1 else -1
-        page = MathHelper.clamp(page + direction, 0, maxPages - 1)
+        setPage(page + direction, maxPages, true)
         return true
     }
 
@@ -283,7 +388,7 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val w = searchWidth
         val h = searchHeight
         val bg = withAlpha(mixColor(panelColor, 0xFF000000.toInt(), 0.6f), 0xFF)
-        drawRoundedRect(context, x, y, w, h, bg, borderColor, max(3, (6 * uiScale).roundToInt()))
+        drawRoundedRect(context, x, y, w, h, bg, borderColor, elementRadius())
     }
 
     private fun drawPanelBackground(
@@ -293,7 +398,7 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         innerPanelColor: Int,
         sidebarColor: Int
     ) {
-        val radius = max(6, (10 * uiScale).roundToInt())
+        val radius = panelRadius()
         val innerRadius = max(2, radius - 3)
         val innerInset = 4
         val innerX = panelX + innerInset
@@ -303,20 +408,144 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val sidebarBottom = panelY + panelHeight - (BASE_GAP * uiScale).roundToInt()
         val sidebarH = max(0, sidebarBottom - headerY)
 
-        val gradientStart = Color(80, 130, 210, 235)
-        val gradientEnd = Color(10, 16, 30, 245)
-        val border = toAwtColor(borderColor)
+        val customTheme = FmeManager.getCustomTheme()
+        val theme = FmeManager.getTheme()
+        val isWhiteTheme = theme == FmeManager.Theme.WHITE
+        val isBlackWhiteTheme = theme == FmeManager.Theme.BLACK_WHITE
+        val isRedTheme = theme == FmeManager.Theme.RED
+        val isMoonwalkerTheme = theme == FmeManager.Theme.MOONWALKER
+        val isVioletTheme = theme == FmeManager.Theme.VIOLET
+        val isFemboyTheme = theme == FmeManager.Theme.FEMBOY
+        val isArgonTheme = theme == FmeManager.Theme.ARGON
+        val isMossTheme = theme == FmeManager.Theme.MOSS
+        val isHazelTheme = theme == FmeManager.Theme.HAZEL
+        val isPastelTheme = theme == FmeManager.Theme.PASTEL_MINT
+            || theme == FmeManager.Theme.PASTEL_PEACH
+            || theme == FmeManager.Theme.PASTEL_LAVENDER
+            || theme == FmeManager.Theme.PASTEL_SKY
+            || theme == FmeManager.Theme.PASTEL_ROSE
+            || theme == FmeManager.Theme.PASTEL_BUTTER
+            || theme == FmeManager.Theme.PASTEL_AQUA
+        val gradientStart: Color
+        val gradientEnd: Color
+        if (customTheme != null) {
+            gradientStart = toAwtColor(customTheme.gradientStart)
+            gradientEnd = toAwtColor(customTheme.gradientEnd)
+        } else if (isWhiteTheme) {
+            gradientStart = Color(255, 255, 255, 235)
+            gradientEnd = Color(0, 0, 0, 245)
+        } else if (isBlackWhiteTheme) {
+            gradientStart = Color(0, 0, 0, 245)
+            gradientEnd = Color(0, 0, 0, 245)
+        } else if (isRedTheme) {
+            gradientStart = Color(255, 0, 0, 235)
+            gradientEnd = Color(0, 0, 0, 245)
+        } else if (isMoonwalkerTheme) {
+            gradientStart = Color(0x15, 0x23, 0x31, 235)
+            gradientEnd = Color(0, 0, 0, 245)
+        } else if (isVioletTheme) {
+            gradientStart = Color(0x65, 0x4E, 0xA3, 235)
+            gradientEnd = Color(0xEA, 0xAF, 0xC8, 245)
+        } else if (isFemboyTheme) {
+            gradientStart = Color(0xCF, 0x62, 0xA9, 235)
+            gradientEnd = Color(0xFF, 0xFF, 0xFF, 245)
+        } else if (isArgonTheme) {
+            gradientStart = Color(0x03, 0x00, 0x1E, 235)
+            gradientEnd = Color(0xFD, 0xEF, 0xF9, 245)
+        } else if (isMossTheme) {
+            gradientStart = Color(0x13, 0x4E, 0x5E, 235)
+            gradientEnd = Color(0x71, 0xB2, 0x80, 245)
+        } else if (isHazelTheme) {
+            gradientStart = Color(0x77, 0xA1, 0xD3, 235)
+            gradientEnd = Color(0xE6, 0x84, 0xAE, 245)
+        } else if (isPastelTheme) {
+            gradientStart = Color(255, 255, 255, 235)
+            gradientEnd = Color(235, 240, 255, 245)
+        } else {
+            gradientStart = Color(80, 130, 210, 235)
+            gradientEnd = Color(10, 16, 30, 245)
+        }
+        val border = toAwtColor(borderColor, if (isWhiteTheme) 120 else null)
         val inner = toAwtColor(innerPanelColor, 170)
-        val sidebar = toAwtColor(sidebarColor, 155)
+        val flatTheme = customTheme?.flatTheme ?: (isWhiteTheme || isBlackWhiteTheme || isRedTheme || isMoonwalkerTheme || isVioletTheme
+            || isFemboyTheme || isArgonTheme || isMossTheme || isHazelTheme || isPastelTheme)
+        val sidebarAlpha = if (flatTheme) 70 else 155
+        val sidebar = toAwtColor(sidebarColor, sidebarAlpha)
 
         PIPNVG.drawNVG(context, 0, 0, width, height) {
-            NVG.gradientRect(panelX, panelY, panelWidth, panelHeight, gradientStart, gradientEnd, Gradient.TopToBottom, radius.toFloat())
+            if (customTheme == null && (isFemboyTheme || isArgonTheme)) {
+                val colors = if (isFemboyTheme) {
+                    arrayOf(
+                        Color(0xCF, 0x62, 0xA9, 235),
+                        Color(0xE4, 0xAD, 0xCD, 235),
+                        Color(0x58, 0xCE, 0xF8, 235),
+                        Color(0xFF, 0xFF, 0xFF, 245)
+                    )
+                } else {
+                    arrayOf(
+                        Color(0x03, 0x00, 0x1E, 235),
+                        Color(0x73, 0x03, 0xC0, 235),
+                        Color(0xEC, 0x38, 0xBC, 235),
+                        Color(0xFD, 0xEF, 0xF9, 245)
+                    )
+                }
+                val segmentH = panelHeight / 3f
+                val r = radius.toFloat()
+                NVG.gradientRect(panelX, panelY, panelWidth, segmentH, colors[0], colors[1], Gradient.TopToBottom, r)
+                if (segmentH > r) {
+                    NVG.rect(panelX, panelY + segmentH - r, panelWidth, r, colors[1])
+                }
+                NVG.gradientRect(panelX, panelY + segmentH, panelWidth, segmentH, colors[1], colors[2], Gradient.TopToBottom, 0f)
+                NVG.gradientRect(panelX, panelY + segmentH * 2f, panelWidth, panelHeight - segmentH * 2f, colors[2], colors[3], Gradient.TopToBottom, r)
+                if (segmentH > r) {
+                    NVG.rect(panelX, panelY + segmentH * 2f, panelWidth, r, colors[2])
+                }
+            } else {
+                NVG.gradientRect(panelX, panelY, panelWidth, panelHeight, gradientStart, gradientEnd, Gradient.TopToBottom, radius.toFloat())
+            }
             NVG.hollowRect(panelX, panelY, panelWidth, panelHeight, 1f, border, radius.toFloat())
-            NVG.rect(innerX, innerY, innerW, innerH, inner, innerRadius.toFloat())
+            if (!flatTheme) {
+                NVG.rect(innerX, innerY, innerW, innerH, inner, innerRadius.toFloat())
+            }
             if (sidebarH > 0) {
                 NVG.rect(sidebarX, headerY, sidebarWidth, sidebarH, sidebar, innerRadius.toFloat())
             }
         }
+    }
+
+    private fun drawSidebarBranding(context: DrawContext) {
+        val scale = uiScale
+        val label = "bart addons"
+        val fontSize = max(10f, 14f * scale)
+        val padding = max(6, (6 * scale).roundToInt())
+        val x = sidebarX + padding
+        val y = sidebarBottom - padding - fontSize.toInt()
+        val width = max(20, sidebarWidth - padding * 2)
+        val palette = listOf(
+            0xFF440347.toInt(),
+            0xFF9D6DC7.toInt(),
+            0xFFDEB6DC.toInt(),
+            0xFFD3C3E0.toInt()
+        )
+        val periodMs = 2400f
+        val base = (System.currentTimeMillis() % periodMs.toLong()) / periodMs
+
+        PIPNVG.drawNVG(context, 0, 0, this.width, this.height) {
+            val color = toAwtColor(animatedPaletteColor(palette, base, 0))
+            NVG.text(label, x.toFloat(), y.toFloat(), fontSize, color, NVG.font)
+        }
+    }
+
+    private fun animatedPaletteColor(palette: List<Int>, base: Float, offset: Int): Int {
+        if (palette.isEmpty()) {
+            return 0xFFFFFFFF.toInt()
+        }
+        val n = palette.size
+        val t = ((base + offset / n.toFloat()) % 1f) * n
+        val idx = t.toInt().coerceIn(0, n - 1)
+        val next = (idx + 1) % n
+        val frac = t - idx
+        return mixColor(palette[idx], palette[next], frac)
     }
 
     private fun drawGrid(
@@ -328,87 +557,227 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         accentColor: Int,
         selectionColor: Int
     ) {
+        if (customThemeEditing) {
+            return
+        }
         val count = entriesCount()
         if (entriesPerPage <= 0) {
             return
         }
         val maxPages = max(1, ceil(count / entriesPerPage.toDouble()).toInt())
-        page = MathHelper.clamp(page, 0, maxPages - 1)
+        if (page >= maxPages) {
+            setPage(maxPages - 1, maxPages, false)
+        }
 
         textureLoadBudget = 3
         val isCustom = tab == Tab.CUSTOM
-        val entriesBlocks = if (isCustom) emptyList() else visibleEntries()
+        val isOther = tab == Tab.OTHER
+        val isConfigs = tab == Tab.CONFIGS
+        val isThemes = tab == Tab.THEMES
+        val isCustomThemes = isThemes && themeSubTab == ThemeSubTab.CUSTOM
+        val entriesBlocks = if (isCustom || isOther || isConfigs || isThemes) emptyList() else visibleEntries()
         val entriesTextures = if (isCustom) visibleTextureEntries() else emptyList()
+        val entriesConfigs = if (isConfigs) visibleConfigEntries() else emptyList()
+        val entriesThemes = if (isThemes) visibleThemeEntries() else emptyList()
+        val entriesOther = if (isOther) visibleOtherEntries() else emptyList()
         val cellBg = withAlpha(mixColor(panelColor(), 0xFF000000.toInt(), 0.18f), 0xFF)
         val cellBorder = withAlpha(mixColor(textColor, panelColor(), 0.75f), 120)
         val cellSelected = mixColor(selectionColor, panelColor(), 0.2f)
-        val pulse = 0.15f * pulse01(900f)
+        val pulse = animationAmount(FmeManager.getSelectionAnimation(), 900f)
 
         if (count == 0) {
-            context.drawText(textRenderer, Text.literal(if (isCustom) "No custom textures found" else "No blocks found"),
+            setPage(0, 1, false)
+            val emptyLabel = when {
+                isCustom -> "No custom textures found"
+                isOther -> "Nothing here yet"
+                isConfigs -> "No configs found"
+                isThemes && isCustomThemes -> "No custom themes found"
+                isThemes -> "No themes found"
+                else -> "No blocks found"
+            }
+            context.drawText(textRenderer, Text.literal(emptyLabel),
                 gridX, gridY, mutedColor, false)
             if (isCustom) {
                 val info = "Drop PNGs into: config/fme/custom_textures"
                 context.drawText(textRenderer, Text.literal(trimToWidth(info, panelWidth - (gridX - panelX) - 12)),
                     gridX, gridY + textRenderer.fontHeight + 4, mutedColor, false)
             }
+            if (isConfigs) {
+                val info = "Drop JSONs into: " + FmeManager.getConfigDir()
+                context.drawText(textRenderer, Text.literal(trimToWidth(info, panelWidth - (gridX - panelX) - 12)),
+                    gridX, gridY + textRenderer.fontHeight + 4, mutedColor, false)
+            }
             return
         }
 
+        val allowHover = !animating
+        val renderItems = !(animating && !isCustom && !isConfigs)
         var hoveredTooltip: Text? = null
-        for (i in 0 until entriesPerPage) {
-            val idx = page * entriesPerPage + i
-            val col = i % gridColumns
-            val row = i / gridColumns
-            if (row >= gridRows) {
-                break
-            }
-            val x = gridX + col * (cellWidth + colGap)
-            val y = gridY + row * (cellHeight + rowGap)
-            val hovered = isInRect(mouseX.toDouble(), mouseY.toDouble(), x, y, cellWidth, cellHeight)
-            if (idx >= count) {
-                continue
-            }
 
-            if (isCustom) {
-                val path = entriesTextures[idx]
-                val name = path.fileName.toString()
-                val isSelected = name.equals(FmeManager.getSelectedCustomTextureName(), ignoreCase = true)
+        fun drawPage(pageIndex: Int, yOffset: Float) {
+            if (pageIndex < 0 || pageIndex >= maxPages) {
+                return
+            }
+            for (i in 0 until entriesPerPage) {
+                val idx = pageIndex * entriesPerPage + i
+                val col = i % gridColumns
+                val row = i / gridColumns
+                if (row >= gridRows) {
+                    break
+                }
+                val x = gridX + col * (cellWidth + colGap)
+                val y = gridY + row * (cellHeight + rowGap) + yOffset
+                val yDraw = y.roundToInt()
+                val hovered = allowHover && isInRect(mouseX.toDouble(), mouseY.toDouble(), x, yDraw, cellWidth, cellHeight)
+                if (idx >= count) {
+                    continue
+                }
+
+                if (isCustom) {
+                    val path = entriesTextures[idx]
+                    val name = path.fileName.toString()
+                    val isSelected = name.equals(FmeManager.getSelectedCustomTextureName(), ignoreCase = true)
+                    val baseBg = if (isSelected) mixColor(cellSelected, accentColor, pulse) else cellBg
+                    val bg = if (hovered) mixColor(baseBg, accentColor, 0.12f + pulse) else baseBg
+                    val border = if (hovered) mixColor(cellBorder, accentColor, 0.25f + pulse) else cellBorder
+                    drawCell(context, x, yDraw, bg, border)
+                    val textureId = getCustomTextureId(path)
+                    if (textureId != null) {
+                        val padding = max(2, (4 * uiScale).roundToInt())
+                        val size = max(1, minOf(cellWidth, cellHeight) - padding * 2)
+                        val drawX = x + (cellWidth - size) / 2
+                        val drawY = yDraw + (cellHeight - size) / 2
+                        context.drawTexture(RenderPipelines.GUI_TEXTURED, textureId, drawX, drawY, 0f, 0f, size, size, size, size)
+                    } else {
+                        val label = trimToWidth(name, cellWidth - 12)
+                        val labelY = yDraw + max(0, (cellHeight - textRenderer.fontHeight) / 2)
+                        context.drawText(textRenderer, Text.literal(label), x + 8, labelY, textColor, false)
+                    }
+                    if (hovered) {
+                        hoveredTooltip = Text.literal(name)
+                    }
+                    continue
+                }
+                if (isConfigs) {
+                    val name = entriesConfigs[idx]
+                    val baseBg = cellBg
+                    val bg = if (hovered) mixColor(baseBg, accentColor, 0.12f + pulse) else baseBg
+                    val border = if (hovered) mixColor(cellBorder, accentColor, 0.25f + pulse) else cellBorder
+                    drawCell(context, x, yDraw, bg, border)
+                    val label = trimToWidth(name, cellWidth - 12)
+                    val labelY = yDraw + max(0, (cellHeight - textRenderer.fontHeight) / 2)
+                    context.drawText(textRenderer, Text.literal(label), x + 8, labelY, textColor, false)
+                    if (hovered) {
+                        hoveredTooltip = Text.literal(name)
+                    }
+                    continue
+                }
+                if (isThemes) {
+                    val name = entriesThemes[idx]
+                    val isSelected = if (isCustomThemes) {
+                        name.equals(FmeManager.getCustomThemeName() ?: "", ignoreCase = true)
+                    } else {
+                        name.equals(currentThemeLabel(), ignoreCase = true)
+                    }
+                    val baseBg = if (isSelected) mixColor(cellSelected, accentColor, pulse) else cellBg
+                    val bg = if (hovered) mixColor(baseBg, accentColor, 0.12f + pulse) else baseBg
+                    val border = if (hovered) mixColor(cellBorder, accentColor, 0.25f + pulse) else cellBorder
+                    drawCell(context, x, yDraw, bg, border)
+                    val label = trimToWidth(name, cellWidth - 12)
+                    val labelY = yDraw + max(0, (cellHeight - textRenderer.fontHeight) / 2)
+                    context.drawText(textRenderer, Text.literal(label), x + 8, labelY, textColor, false)
+                    if (hovered) {
+                        hoveredTooltip = Text.literal(name)
+                    }
+                    continue
+                }
+                if (isOther) {
+                    val entry = entriesOther[idx]
+                    val baseBg = cellBg
+                    val bg = if (hovered) mixColor(baseBg, accentColor, 0.12f + pulse) else baseBg
+                    val border = if (hovered) mixColor(cellBorder, accentColor, 0.25f + pulse) else cellBorder
+                    drawCell(context, x, yDraw, bg, border)
+                    val labelY = yDraw + max(0, (cellHeight - textRenderer.fontHeight) / 2)
+                    val value = entry.value
+                    val valueWidth = if (value == null) 0 else textRenderer.getWidth(value)
+                    val colorPreview = entry.colorPreview
+                    val previewSize = if (colorPreview == null) 0 else 8
+                    val previewGap = if (colorPreview == null) 0 else 4
+                    val rightReserve = valueWidth + previewSize + previewGap
+                    val title = trimToWidth(entry.title, cellWidth - 12 - rightReserve)
+                    context.drawText(textRenderer, Text.literal(title), x + 8, labelY, textColor, false)
+                    if (value != null) {
+                        val valueX = x + cellWidth - 8 - valueWidth
+                        val valueColor = entry.valueColor ?: textColor
+                        context.drawText(textRenderer, Text.literal(value), valueX, labelY, valueColor, false)
+                    }
+                    if (colorPreview != null) {
+                        val previewX = x + cellWidth - 8 - valueWidth - previewGap - previewSize
+                        val previewY = labelY + (textRenderer.fontHeight - previewSize) / 2
+                        context.fill(previewX, previewY, previewX + previewSize, previewY + previewSize, colorPreview)
+                        context.fill(previewX - 1, previewY - 1, previewX + previewSize + 1, previewY, cellBorder)
+                        context.fill(previewX - 1, previewY + previewSize, previewX + previewSize + 1, previewY + previewSize + 1, cellBorder)
+                        context.fill(previewX - 1, previewY, previewX, previewY + previewSize, cellBorder)
+                        context.fill(previewX + previewSize, previewY, previewX + previewSize + 1, previewY + previewSize, cellBorder)
+                    }
+                    if (hovered) {
+                        hoveredTooltip = Text.literal(entry.tooltip ?: entry.title)
+                    }
+                    continue
+                }
+
+                val block = entriesBlocks[idx]
+                val isSelected = FmeManager.getSelectedSourceType() == FmeManager.SelectedSourceType.BLOCK
+                    && block == FmeManager.getSelectedSource()
                 val baseBg = if (isSelected) mixColor(cellSelected, accentColor, pulse) else cellBg
                 val bg = if (hovered) mixColor(baseBg, accentColor, 0.12f + pulse) else baseBg
                 val border = if (hovered) mixColor(cellBorder, accentColor, 0.25f + pulse) else cellBorder
-                drawCell(context, x, y, bg, border)
-                val label = trimToWidth(name, cellWidth - 12)
-                val labelY = y + max(0, (cellHeight - textRenderer.fontHeight) / 2)
-                context.drawText(textRenderer, Text.literal(label), x + 8, labelY, textColor, false)
-                if (hovered) {
-                    hoveredTooltip = Text.literal(name)
+                drawCell(context, x, yDraw, bg, border)
+                val item = block.asItem()
+                val hasItem = item != Items.AIR
+                val iconSize = 16
+                val iconX = x + max(0, (cellWidth - iconSize) / 2)
+                val iconY = yDraw + max(0, (cellHeight - iconSize) / 2)
+                if (renderItems && hasItem) {
+                    context.drawItem(ItemStack(item), iconX, iconY)
                 }
-                continue
-            }
-
-            val block = entriesBlocks[idx]
-            val isSelected = FmeManager.getSelectedSourceType() == FmeManager.SelectedSourceType.BLOCK
-                && block == FmeManager.getSelectedSource()
-            val baseBg = if (isSelected) mixColor(cellSelected, accentColor, pulse) else cellBg
-            val bg = if (hovered) mixColor(baseBg, accentColor, 0.12f + pulse) else baseBg
-            val border = if (hovered) mixColor(cellBorder, accentColor, 0.25f + pulse) else cellBorder
-            drawCell(context, x, y, bg, border)
-            val item = block.asItem()
-            val hasItem = item != Items.AIR
-            val iconSize = 16
-            val iconX = x + max(0, (cellWidth - iconSize) / 2)
-            val iconY = y + max(0, (cellHeight - iconSize) / 2)
-            if (hasItem) {
-                context.drawItem(ItemStack(item), iconX, iconY)
-            }
-            if (FmeManager.isFavorite(block)) {
-                drawFavoriteStar(context, x, y, accentColor)
-            }
-            if (hovered) {
-                hoveredTooltip = Text.literal(block.name.string)
+                if (renderItems && FmeManager.isFavorite(block)) {
+                    drawFavoriteStar(context, x, yDraw, accentColor)
+                }
+                if (hovered) {
+                    hoveredTooltip = Text.literal(block.name.string)
+                }
             }
         }
+
+        val gridW = gridColumns * cellWidth + max(0, gridColumns - 1) * colGap
+        val gridH = gridRows * cellHeight + max(0, gridRows - 1) * rowGap
+        context.enableScissor(gridX, gridY, gridX + gridW, gridY + gridH)
+        val now = System.currentTimeMillis()
+        val anim = computePageAnim(now, maxPages)
+        if (anim == null) {
+            drawPage(page, 0f)
+        } else {
+            val pageHeight = gridH.toFloat()
+            val baseOffset = if (anim.direction < 0) {
+                -pageHeight + anim.progress * pageHeight
+            } else {
+                -anim.progress * pageHeight
+            }
+            val nextOffset = if (anim.direction < 0) {
+                anim.progress * pageHeight
+            } else {
+                (1f - anim.progress) * pageHeight
+            }
+            if (anim.direction > 0) {
+                drawPage(anim.basePage, baseOffset)
+                drawPage(anim.nextPage, nextOffset)
+            } else {
+                drawPage(anim.nextPage, nextOffset)
+                drawPage(anim.basePage, baseOffset)
+            }
+        }
+        context.disableScissor()
         if (hoveredTooltip != null) {
             drawThemedTooltip(context, hoveredTooltip, mouseX, mouseY, textColor, panelColor(), accentColor)
         }
@@ -416,6 +785,9 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     }
 
     private fun drawPager(context: DrawContext, textColor: Int, mutedColor: Int, accentColor: Int) {
+        if (customThemeEditing) {
+            return
+        }
         val count = entriesCount()
         if (entriesPerPage <= 0) {
             return
@@ -445,14 +817,14 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val h = (BASE_PAGER_HEIGHT * uiScale).roundToInt()
         val bg = if (enabled) panelColor() else withAlpha(panelColor(), 120)
         val border = if (enabled) accentColor else withAlpha(accentColor, 120)
-        drawRoundedRect(context, x, y, w, h, bg, border, max(3, (6 * uiScale).roundToInt()))
+        drawRoundedRect(context, x, y, w, h, bg, border, elementRadius())
         val tx = x + max(0, (w - textRenderer.getWidth(label)) / 2)
         val ty = y + max(0, (h - textRenderer.fontHeight) / 2)
         context.drawText(textRenderer, Text.literal(label), tx, ty, if (enabled) textColor else withAlpha(textColor, 120), false)
     }
 
     private fun drawCell(context: DrawContext, x: Int, y: Int, bg: Int, border: Int) {
-        drawRoundedRect(context, x, y, cellWidth, cellHeight, bg, border, max(3, (6 * uiScale).roundToInt()))
+        drawRoundedRect(context, x, y, cellWidth, cellHeight, bg, border, elementRadius())
     }
 
     private fun drawFavoriteStar(context: DrawContext, x: Int, y: Int, color: Int) {
@@ -480,7 +852,7 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val textHeight = textRenderer.fontHeight
         val boxW = textWidth + paddingX * 2
         val boxH = textHeight + paddingY * 2
-        val radius = max(3, (6 * uiScale).roundToInt())
+        val radius = elementRadius()
         val bg = withAlpha(mixColor(panelColor, 0xFF000000.toInt(), 0.45f), 235)
         val border = mixColor(accentColor, panelColor, 0.55f)
 
@@ -496,50 +868,6 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         context.drawText(textRenderer, tooltipText, x + paddingX, y + paddingY, textColor, false)
     }
 
-    private fun handleGridClick(mouseX: Double, mouseY: Double, button: Int): Boolean {
-        if (entriesPerPage <= 0) {
-            return false
-        }
-        val col = ((mouseX - gridX) / (cellWidth + colGap)).toInt()
-        val row = ((mouseY - gridY) / (cellHeight + rowGap)).toInt()
-        if (col < 0 || row < 0 || col >= gridColumns || row >= gridRows) {
-            return false
-        }
-        val idx = page * entriesPerPage + row * gridColumns + col
-        if (tab == Tab.CUSTOM) {
-            val entries = visibleTextureEntries()
-            if (idx >= entries.size) {
-                return false
-            }
-            val file = entries[idx]
-            if (button == 0) {
-                FmeManager.selectCustomTexture(file)
-                HatTextureManager.selectTexture(file)
-                playTabClickSound()
-            } else if (button == 1) {
-                FmeManager.toggleCustomTextureFavorite(file.fileName.toString())
-                playTabClickSound()
-            }
-            return true
-        }
-        if (tab == Tab.ALL || tab == Tab.FAVORITES) {
-            val entries = visibleEntries()
-            if (idx >= entries.size) {
-                return false
-            }
-            val block = entries[idx]
-            if (button == 0) {
-                FmeManager.setSelectedSource(block)
-                playTabClickSound()
-            } else if (button == 1) {
-                FmeManager.toggleFavorite(block)
-                playTabClickSound()
-            }
-            return true
-        }
-        return false
-    }
-
     private fun handlePagerClick(mouseX: Double, mouseY: Double, button: Int): Boolean {
         if (button != 0) {
             return false
@@ -549,12 +877,12 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         val count = entriesCount()
         val maxPages = max(1, ceil(count / entriesPerPage.toDouble()).toInt())
         if (isInRect(mouseX, mouseY, prevX, pagerY, w, h) && page > 0) {
-            page--
+            setPage(page - 1, maxPages, true)
             playTabClickSound()
             return true
         }
         if (isInRect(mouseX, mouseY, nextX, pagerY, w, h) && page < maxPages - 1) {
-            page++
+            setPage(page + 1, maxPages, true)
             playTabClickSound()
             return true
         }
@@ -577,24 +905,94 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         return x + width + gapBetween
     }
 
+    private fun addThemeSubTabButton(
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        label: String,
+        tab: ThemeSubTab
+    ) {
+        val button = ThemeSubTabButton(x, y, width, height, label) { selectThemeSubTab(tab) }
+        themeSubTabButtons.add(button)
+        addDrawableChild(button)
+    }
+
     private fun selectTab(next: Tab) {
         if (tab == next) {
             return
         }
         tab = next
-        page = 0
+        if (tab != Tab.THEMES || themeSubTab != ThemeSubTab.CUSTOM) {
+            customThemeEditing = false
+            customThemeDraft = null
+        }
+        setPage(0, 1, false)
         if (tab == Tab.CUSTOM) {
             refreshTextures()
+        } else if (tab == Tab.OTHER) {
+            refreshOther()
+        } else if (tab == Tab.CONFIGS) {
+            refreshConfigs()
+        } else if (tab == Tab.THEMES) {
+            if (themeSubTab == ThemeSubTab.THEMES) {
+                refreshThemes()
+            } else {
+                refreshCustomThemes()
+            }
         }
+        applyGridLayoutForTab()
+        applyThemeSubTabLayout()
+        updateTabState()
+        playTabClickSound()
+    }
+
+    private fun selectThemeSubTab(next: ThemeSubTab) {
+        if (themeSubTab == next) {
+            return
+        }
+        themeSubTab = next
+        if (themeSubTab != ThemeSubTab.CUSTOM) {
+            customThemeEditing = false
+            customThemeDraft = null
+        }
+        setPage(0, 1, false)
+        if (tab == Tab.THEMES) {
+            if (themeSubTab == ThemeSubTab.THEMES) {
+                refreshThemes()
+            } else {
+                refreshCustomThemes()
+            }
+        }
+        applyThemeSubTabLayout()
         updateTabState()
         playTabClickSound()
     }
 
     private fun updateTabState() {
-        searchField.visible = true
-        searchField.active = true
-        searchField.setFocused(true)
+        searchField.visible = !customThemeEditing
+        searchField.active = !customThemeEditing
+        if (!customThemeEditing) {
+            searchField.setFocused(true)
+        }
         tabButtons.forEach { it.updateActive(tab) }
+        themeSubTabButtons.forEach { it.updateActive(themeSubTab) }
+        customThemeWidgets.forEach {
+            it.visible = customThemeEditing
+            it.active = customThemeEditing
+        }
+        val placeholder = when (tab) {
+            Tab.CONFIGS -> "Search configs..."
+            Tab.THEMES -> if (themeSubTab == ThemeSubTab.CUSTOM) "Search custom themes..." else "Search themes..."
+            Tab.OTHER -> "Search..."
+            else -> "Search blocks and textures..."
+        }
+        searchField.setPlaceholder(Text.literal(placeholder))
+        val showThemeTabs = tab == Tab.THEMES
+        themeSubTabButtons.forEach {
+            it.visible = showThemeTabs
+            it.active = showThemeTabs
+        }
     }
 
     private fun recalcMetrics() {
@@ -638,9 +1036,43 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         return textureFiles.filter { it.fileName.toString().lowercase(Locale.ROOT).contains(query) }
     }
 
+    private fun visibleConfigEntries(): List<String> {
+        val query = searchField.text.trim().lowercase(Locale.ROOT)
+        if (query.isEmpty()) {
+            return configNames
+        }
+        return configNames.filter { it.lowercase(Locale.ROOT).contains(query) }
+    }
+
+    private fun visibleThemeEntries(): List<String> {
+        val query = searchField.text.trim().lowercase(Locale.ROOT)
+        val source = if (themeSubTab == ThemeSubTab.CUSTOM) customThemeNames else themeNames
+        if (query.isEmpty()) {
+            return source
+        }
+        return source.filter { it.lowercase(Locale.ROOT).contains(query) }
+    }
+
+    private fun visibleOtherEntries(): List<OtherEntry> {
+        if (otherEntries.isEmpty()) {
+            refreshOther()
+        }
+        val query = searchField.text.trim().lowercase(Locale.ROOT)
+        if (query.isEmpty()) {
+            return otherEntries
+        }
+        return otherEntries.filter { it.searchLabel.lowercase(Locale.ROOT).contains(query) }
+    }
+
     private fun entriesCount(): Int {
+        if (customThemeEditing) {
+            return 0
+        }
         return when (tab) {
             Tab.CUSTOM -> visibleTextureEntries().size
+            Tab.OTHER -> visibleOtherEntries().size
+            Tab.CONFIGS -> visibleConfigEntries().size
+            Tab.THEMES -> visibleThemeEntries().size
             else -> visibleEntries().size
         }
     }
@@ -650,6 +1082,445 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         customTextureCache.clear()
         customTextureFailed.clear()
         textureFiles.addAll(HatTextureManager.listTextures())
+    }
+
+    private fun refreshConfigs() {
+        configNames.clear()
+        configNames.addAll(FmeManager.listConfigNames())
+    }
+
+    private fun refreshThemes() {
+        themeNames.clear()
+        themeNames.addAll(listOf("White", "Black & White", "Blue", "Purple", "Red", "Moonwalker", "Violet", "Femboy", "Argon", "Moss",
+            "Hazel", "Pastel Mint", "Pastel Peach", "Pastel Lavender", "Pastel Sky", "Pastel Rose",
+            "Pastel Butter", "Pastel Aqua"))
+    }
+
+    private fun refreshCustomThemes() {
+        customThemeNames.clear()
+        customThemeNames.add(NEW_CUSTOM_THEME_LABEL)
+        customThemeNames.addAll(FmeManager.listCustomThemeNames())
+    }
+
+    fun refreshCustomThemesView() {
+        if (tab == Tab.THEMES && themeSubTab == ThemeSubTab.CUSTOM) {
+            refreshCustomThemes()
+            setPage(0, 1, false)
+            applyGridLayoutForTab()
+            applyThemeSubTabLayout()
+            updateTabState()
+        }
+    }
+
+    private fun enterCustomThemeEditor(name: String?) {
+        customThemeEditing = true
+        customThemeDraft = if (name == null) {
+            FmeManager.snapshotCurrentTheme("New Theme")
+        } else {
+            FmeManager.loadCustomTheme(name) ?: FmeManager.snapshotCurrentTheme(name)
+        }
+        clearAndInit()
+    }
+
+    private fun exitCustomThemeEditor() {
+        customThemeEditing = false
+        customThemeDraft = null
+        clearAndInit()
+    }
+
+    private fun initCustomThemeEditorWidgets() {
+        val theme = customThemeDraft ?: return
+        val rowGap = max(4, (4 * uiScale).roundToInt())
+        val colGap = max(6, (6 * uiScale).roundToInt())
+        val fieldHeight = max(BASE_FIELD_HEIGHT.toFloat(), (textRenderer.fontHeight + 4) * uiScale).roundToInt()
+        val buttonHeight = (BASE_BUTTON_HEIGHT * uiScale).roundToInt()
+        val editorX = contentX
+        val editorWidth = gridAreaWidth
+        val halfWidth = max(90, (editorWidth - colGap) / 2)
+        var y = gridY
+
+        val nameField = TextFieldWidget(
+            textRenderer,
+            editorX + searchTextOffsetX,
+            y + max(1, (fieldHeight - textRenderer.fontHeight) / 2),
+            editorWidth,
+            fieldHeight,
+            Text.literal("Theme Name")
+        )
+        nameField.setText(theme.name ?: "New Theme")
+        nameField.setChangedListener { theme.name = it.trim() }
+        nameField.setDrawsBackground(true)
+        addDrawableChild(nameField)
+        customThemeNameField = nameField
+        customThemeWidgets.add(nameField)
+        y += fieldHeight + rowGap
+
+        fun addColorButton(
+            label: String,
+            x: Int,
+            y: Int,
+            getter: () -> Int,
+            setter: (Int) -> Unit
+        ) {
+            val button = ButtonWidget.builder(Text.literal("$label: ${formatColor(getter())}")) { btn ->
+                client?.setScreen(ThemeColorPickerScreen(this, label, getter()) { value ->
+                    setter(value)
+                    btn.message = Text.literal("$label: ${formatColor(value)}")
+                })
+            }.dimensions(x, y, halfWidth, buttonHeight).build()
+            addDrawableChild(button)
+            customThemeWidgets.add(button)
+        }
+
+        fun addToggleButton(
+            label: String,
+            x: Int,
+            y: Int,
+            getter: () -> Boolean,
+            setter: (Boolean) -> Unit
+        ) {
+            val button = ButtonWidget.builder(Text.literal("$label: ${if (getter()) "On" else "Off"}")) { btn ->
+                val next = !getter()
+                setter(next)
+                btn.message = Text.literal("$label: ${if (next) "On" else "Off"}")
+            }.dimensions(x, y, halfWidth, buttonHeight).build()
+            addDrawableChild(button)
+            customThemeWidgets.add(button)
+        }
+
+        fun addAnimButton(
+            label: String,
+            x: Int,
+            y: Int,
+            getter: () -> FmeManager.ThemeAnimation?,
+            setter: (FmeManager.ThemeAnimation) -> Unit
+        ) {
+            val current = getter() ?: FmeManager.ThemeAnimation.PULSE
+            val button = ButtonWidget.builder(Text.literal("$label: ${current.name}")) { btn ->
+                val next = nextAnimation(getter() ?: FmeManager.ThemeAnimation.PULSE)
+                setter(next)
+                btn.message = Text.literal("$label: ${next.name}")
+            }.dimensions(x, y, halfWidth, buttonHeight).build()
+            addDrawableChild(button)
+            customThemeWidgets.add(button)
+        }
+
+        addColorButton("Panel", editorX, y, { theme.panelColor }) { theme.panelColor = it }
+        addColorButton("Border", editorX + halfWidth + colGap, y, { theme.borderColor }) { theme.borderColor = it }
+        y += buttonHeight + rowGap
+        addColorButton("Text", editorX, y, { theme.textColor }) { theme.textColor = it }
+        addColorButton("Accent", editorX + halfWidth + colGap, y, { theme.accentTextColor }) { theme.accentTextColor = it }
+        y += buttonHeight + rowGap
+        addColorButton("Selection", editorX, y, { theme.selectionColor }) { theme.selectionColor = it }
+        addColorButton("Gradient A", editorX + halfWidth + colGap, y, { theme.gradientStart }) { theme.gradientStart = it }
+        y += buttonHeight + rowGap
+        addColorButton("Gradient B", editorX, y, { theme.gradientEnd }) { theme.gradientEnd = it }
+        addToggleButton("Flat Theme", editorX + halfWidth + colGap, y, { theme.flatTheme }) { theme.flatTheme = it }
+        y += buttonHeight + rowGap
+
+        val panelSlider = ThemeValueSlider(
+            editorX,
+            y,
+            halfWidth,
+            buttonHeight,
+            "Panel Radius",
+            theme.panelRadius,
+            0f,
+            24f
+        ) { value -> theme.panelRadius = value }
+        addDrawableChild(panelSlider)
+        customThemeWidgets.add(panelSlider)
+        val elementSlider = ThemeValueSlider(
+            editorX + halfWidth + colGap,
+            y,
+            halfWidth,
+            buttonHeight,
+            "Element Radius",
+            theme.elementRadius,
+            0f,
+            18f
+        ) { value -> theme.elementRadius = value }
+        addDrawableChild(elementSlider)
+        customThemeWidgets.add(elementSlider)
+        y += buttonHeight + rowGap
+
+        addAnimButton("Tab Anim", editorX, y, { theme.tabAnimation }) { theme.tabAnimation = it }
+        addAnimButton("Select Anim", editorX + halfWidth + colGap, y, { theme.selectionAnimation }) { theme.selectionAnimation = it }
+        y += buttonHeight + rowGap + max(2, rowGap / 2)
+
+        val saveButton = ButtonWidget.builder(Text.literal("Save & Apply")) {
+            if (!theme.name.isNullOrBlank()) {
+                FmeManager.saveCustomTheme(theme)
+                FmeManager.applyCustomTheme(theme)
+                refreshCustomThemes()
+                exitCustomThemeEditor()
+            }
+        }.dimensions(editorX, y, editorWidth, buttonHeight).build()
+        addDrawableChild(saveButton)
+        customThemeWidgets.add(saveButton)
+        y += buttonHeight + rowGap
+
+        val backButton = ButtonWidget.builder(Text.literal("Back")) {
+            exitCustomThemeEditor()
+        }.dimensions(editorX, y, editorWidth, buttonHeight).build()
+        addDrawableChild(backButton)
+        customThemeWidgets.add(backButton)
+    }
+
+    private fun formatColor(color: Int): String {
+        return String.format("#%08X", color)
+    }
+
+    private fun nextAnimation(current: FmeManager.ThemeAnimation): FmeManager.ThemeAnimation {
+        val values = FmeManager.ThemeAnimation.values()
+        val idx = values.indexOf(current).coerceAtLeast(0)
+        return values[(idx + 1) % values.size]
+    }
+
+    private fun refreshOther() {
+        otherEntries.clear()
+        val hudEnabled = GifHudManager.isEnabled()
+        val gifName = GifHudManager.getSelectedFileName()?.takeIf { it.isNotBlank() } ?: "none"
+        val xValue = GifHudManager.getX().roundToInt().toString()
+        val yValue = GifHudManager.getY().roundToInt().toString()
+        val scaleValue = String.format(Locale.ROOT, "%.2fx", GifHudManager.getScale())
+
+        otherEntries.add(
+            OtherEntry(
+                title = "GIF HUD",
+                value = if (hudEnabled) "ON" else "OFF",
+                tooltip = "Toggle GIF HUD overlay. Right click to open editor.",
+                onLeftClick = {
+                    GifHudManager.toggleEnabled()
+                    refreshOther()
+                },
+                onRightClick = {
+                    client?.setScreen(GifHudEditorScreen(this))
+                }
+            )
+        )
+        otherEntries.add(
+            OtherEntry(
+                title = "GIF File",
+                value = gifName,
+                tooltip = "Left click to cycle GIFs. Right click to clear. Folder: ${GifHudManager.getGifDir()}",
+                onLeftClick = {
+                    GifHudManager.selectNextGif()
+                    refreshOther()
+                },
+                onRightClick = {
+                    GifHudManager.clearGif()
+                    refreshOther()
+                }
+            )
+        )
+        otherEntries.add(
+            OtherEntry(
+                title = "Position X",
+                value = xValue,
+                tooltip = "Left click +5, right click -5.",
+                onLeftClick = {
+                    GifHudManager.nudgeX(5f)
+                    refreshOther()
+                },
+                onRightClick = {
+                    GifHudManager.nudgeX(-5f)
+                    refreshOther()
+                }
+            )
+        )
+        otherEntries.add(
+            OtherEntry(
+                title = "Position Y",
+                value = yValue,
+                tooltip = "Left click +5, right click -5.",
+                onLeftClick = {
+                    GifHudManager.nudgeY(5f)
+                    refreshOther()
+                },
+                onRightClick = {
+                    GifHudManager.nudgeY(-5f)
+                    refreshOther()
+                }
+            )
+        )
+        otherEntries.add(
+            OtherEntry(
+                title = "Scale",
+                value = scaleValue,
+                tooltip = "Left click +0.1, right click -0.1.",
+                onLeftClick = {
+                    GifHudManager.nudgeScale(0.1f)
+                    refreshOther()
+                },
+                onRightClick = {
+                    GifHudManager.nudgeScale(-0.1f)
+                    refreshOther()
+                }
+            )
+        )
+    }
+
+
+
+    private fun themeFromLabel(label: String): FmeManager.Theme? {
+        val normalized = label.trim().lowercase(Locale.ROOT).replace("&", "").replace("  ", " ")
+        return when (normalized) {
+            "white" -> FmeManager.Theme.WHITE
+            "black white" -> FmeManager.Theme.BLACK_WHITE
+            "blue" -> FmeManager.Theme.BLUE
+            "purple" -> FmeManager.Theme.PURPLE
+            "red" -> FmeManager.Theme.RED
+            "moonwalker" -> FmeManager.Theme.MOONWALKER
+            "violet" -> FmeManager.Theme.VIOLET
+            "femboy" -> FmeManager.Theme.FEMBOY
+            "argon" -> FmeManager.Theme.ARGON
+            "moss" -> FmeManager.Theme.MOSS
+            "hazel" -> FmeManager.Theme.HAZEL
+            "pastel mint" -> FmeManager.Theme.PASTEL_MINT
+            "pastel peach" -> FmeManager.Theme.PASTEL_PEACH
+            "pastel lavender" -> FmeManager.Theme.PASTEL_LAVENDER
+            "pastel sky" -> FmeManager.Theme.PASTEL_SKY
+            "pastel rose" -> FmeManager.Theme.PASTEL_ROSE
+            "pastel butter" -> FmeManager.Theme.PASTEL_BUTTER
+            "pastel aqua" -> FmeManager.Theme.PASTEL_AQUA
+            else -> null
+        }
+    }
+
+    private fun currentThemeLabel(): String {
+        if (FmeManager.isCustomThemeActive()) {
+            return ""
+        }
+        return when (FmeManager.getTheme()) {
+            FmeManager.Theme.WHITE -> "White"
+            FmeManager.Theme.BLACK_WHITE -> "Black & White"
+            FmeManager.Theme.BLUE -> "Blue"
+            FmeManager.Theme.PURPLE -> "Purple"
+            FmeManager.Theme.RED -> "Red"
+            FmeManager.Theme.MOONWALKER -> "Moonwalker"
+            FmeManager.Theme.VIOLET -> "Violet"
+            FmeManager.Theme.FEMBOY -> "Femboy"
+            FmeManager.Theme.ARGON -> "Argon"
+            FmeManager.Theme.MOSS -> "Moss"
+            FmeManager.Theme.HAZEL -> "Hazel"
+            FmeManager.Theme.PASTEL_MINT -> "Pastel Mint"
+            FmeManager.Theme.PASTEL_PEACH -> "Pastel Peach"
+            FmeManager.Theme.PASTEL_LAVENDER -> "Pastel Lavender"
+            FmeManager.Theme.PASTEL_SKY -> "Pastel Sky"
+            FmeManager.Theme.PASTEL_ROSE -> "Pastel Rose"
+            FmeManager.Theme.PASTEL_BUTTER -> "Pastel Butter"
+            FmeManager.Theme.PASTEL_AQUA -> "Pastel Aqua"
+        }
+    }
+
+    private fun setPage(target: Int, maxPages: Int, animate: Boolean) {
+        val shouldAnimate = animate && tab == Tab.CONFIGS
+        val clamped = MathHelper.clamp(target, 0, maxPages - 1)
+        if (!shouldAnimate || entriesPerPage <= 0 || kotlin.math.abs(clamped - page) > 1) {
+            page = clamped
+            animFromPage = clamped.toFloat()
+            animToPage = clamped
+            animating = false
+            animStartMs = 0L
+            return
+        }
+        if (clamped == page && !animating) {
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (animating) {
+            animFromPage = currentAnimatedPage(now, maxPages)
+        } else {
+            animFromPage = page.toFloat()
+        }
+        animToPage = clamped
+        animStartMs = now
+        animating = true
+        page = clamped
+    }
+
+    private fun currentAnimatedPage(now: Long, maxPages: Int): Float {
+        val anim = computePageAnim(now, maxPages) ?: return page.toFloat()
+        return if (anim.direction > 0) {
+            anim.basePage + anim.progress
+        } else {
+            (anim.basePage + 1) - anim.progress
+        }
+    }
+
+    private fun computePageAnim(now: Long, maxPages: Int): PageAnim? {
+        if (!animating) {
+            return null
+        }
+        val delta = animToPage.toFloat() - animFromPage
+        if (kotlin.math.abs(delta) <= 0.001f) {
+            animating = false
+            animFromPage = animToPage.toFloat()
+            return null
+        }
+        val direction = if (delta > 0f) 1 else -1
+        val t = ((now - animStartMs).toFloat() / PAGE_ANIM_MS).coerceIn(0f, 1f)
+        val eased = easeOutCubic(t)
+        val basePage = MathHelper.clamp(kotlin.math.min(animFromPage, animToPage.toFloat()).toInt(), 0, maxPages - 1)
+        val nextPage = MathHelper.clamp(basePage + 1, 0, maxPages - 1)
+        if (basePage == nextPage) {
+            animating = false
+            animFromPage = animToPage.toFloat()
+            return null
+        }
+        val startOffset = (animFromPage - basePage).coerceIn(0f, 1f)
+        val startProgress = if (direction > 0) startOffset else 1f - startOffset
+        val progress = startProgress + (1f - startProgress) * eased
+        if (t >= 1f) {
+            animating = false
+            animFromPage = animToPage.toFloat()
+        }
+        return PageAnim(basePage, nextPage, progress.coerceIn(0f, 1f), direction)
+    }
+
+    private data class PageAnim(
+        val basePage: Int,
+        val nextPage: Int,
+        val progress: Float,
+        val direction: Int
+    )
+
+    private fun applyGridLayoutForTab() {
+        if (tab == Tab.CONFIGS || tab == Tab.THEMES) {
+            cellHeight = (BASE_CELL_HEIGHT * uiScale).roundToInt()
+            rowGap = max(2, (BASE_GAP * uiScale).roundToInt() / 2)
+            gridColumns = 1
+            cellWidth = max(60, gridAreaWidth)
+            gridX = contentX
+            return
+        }
+        if (tab == Tab.OTHER) {
+            gridColumns = 1
+            cellWidth = max(60, gridAreaWidth)
+            cellHeight = max(cellHeight, (BASE_CELL_HEIGHT * uiScale * 1.4f).roundToInt())
+            rowGap = max(rowGap, (BASE_GAP * uiScale).roundToInt())
+            gridX = contentX
+            return
+        }
+        cellHeight = (BASE_CELL_HEIGHT * uiScale).roundToInt()
+        rowGap = max(2, (BASE_GAP * uiScale).roundToInt() / 2)
+        cellWidth = baseCellWidth
+        gridColumns = baseGridColumns
+        val actualGridWidth = gridColumns * cellWidth + max(0, gridColumns - 1) * colGap
+        gridX = contentX + max(0, (gridAreaWidth - actualGridWidth) / 2)
+    }
+
+    private fun applyThemeSubTabLayout() {
+        gridY = if (tab == Tab.THEMES) {
+            baseGridY + themeSubTabHeight + themeSubTabGap
+        } else {
+            baseGridY
+        }
+        val layoutGap = (BASE_GAP * uiScale).roundToInt()
+        val availableGridHeight = pagerY - layoutGap - gridY
+        gridRows = max(1, availableGridHeight / (cellHeight + rowGap))
+        entriesPerPage = max(1, gridColumns * gridRows)
     }
 
     private fun getCustomTextureId(path: Path): Identifier? {
@@ -700,6 +1571,14 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
     }
 
     private fun panelColor(): Int = FmeManager.getGuiPanelColor()
+
+    private fun panelRadius(): Int {
+        return max(2, (FmeManager.getPanelCornerRadius() * uiScale).roundToInt())
+    }
+
+    private fun elementRadius(): Int {
+        return max(2, (FmeManager.getElementCornerRadius() * uiScale).roundToInt())
+    }
 
     private fun drawBorder(context: DrawContext, x: Int, y: Int, w: Int, h: Int, color: Int) {
         context.fill(x, y, x + w, y + 1, color)
@@ -761,6 +1640,148 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
         return (0.5f + 0.5f * sin((t * (Math.PI * 2)).toFloat())).coerceIn(0f, 1f)
     }
 
+    private fun animationAmount(animation: FmeManager.ThemeAnimation, periodMs: Float): Float {
+        val t = (System.currentTimeMillis() % periodMs.toLong()).toFloat() / periodMs
+        val pulse = pulse01(periodMs)
+        val triangle = if (t < 0.5f) t * 2f else (1f - t) * 2f
+        return when (animation) {
+            FmeManager.ThemeAnimation.NONE -> 0f
+            FmeManager.ThemeAnimation.PULSE -> 0.15f * pulse
+            FmeManager.ThemeAnimation.GLOW -> 0.25f * pulse
+            FmeManager.ThemeAnimation.SLIDE -> 0.2f * triangle
+            FmeManager.ThemeAnimation.BOUNCE -> 0.2f * (1f - (1f - pulse) * (1f - pulse))
+            FmeManager.ThemeAnimation.FADE -> 0.12f * (0.5f + 0.5f * sin((t * (Math.PI * 2)).toFloat()))
+        }
+    }
+
+    private inner class TabsWidget(
+        private val x: Int,
+        private val y: Int,
+        private val width: Int,
+        private val tabHeight: Int,
+        private val gapBetween: Int,
+        private val tabs: List<Triple<String, Identifier, Tab>>
+    ) {
+        var endY: Int = y
+            private set
+
+        fun initButtons() {
+            tabButtons.clear()
+            var tabY = y
+            tabs.forEach { (label, icon, target) ->
+                addTabButton(x, tabY, tabHeight, width, gapBetween, label, icon, target)
+                tabY += tabHeight + gapBetween
+            }
+            endY = tabY - gapBetween
+        }
+    }
+
+    private inner class BlockGridWidget {
+        fun handleGridClick(mouseX: Double, mouseY: Double, button: Int): Boolean {
+            if (entriesPerPage <= 0) {
+                return false
+            }
+            if (animating) {
+                return false
+            }
+            val col = ((mouseX - gridX) / (cellWidth + colGap)).toInt()
+            val row = ((mouseY - gridY) / (cellHeight + rowGap)).toInt()
+            if (col < 0 || row < 0 || col >= gridColumns || row >= gridRows) {
+                return false
+            }
+            val idx = page * entriesPerPage + row * gridColumns + col
+            if (tab == Tab.CUSTOM) {
+                val entries = visibleTextureEntries()
+                if (idx >= entries.size) {
+                    return false
+                }
+                val file = entries[idx]
+                if (button == 0) {
+                    FmeManager.selectCustomTexture(file)
+                    HatTextureManager.selectTexture(file)
+                    playTabClickSound()
+                } else if (button == 1) {
+                    FmeManager.toggleCustomTextureFavorite(file.fileName.toString())
+                    playTabClickSound()
+                }
+                return true
+            }
+            if (tab == Tab.CONFIGS) {
+                val entries = visibleConfigEntries()
+                if (idx >= entries.size) {
+                    return false
+                }
+                val name = entries[idx]
+                if (button == 0) {
+                    val loaded = FmeManager.loadConfig(name)
+                    if (loaded) {
+                        FmeManager.sendClientMessage("Loaded FME config: $name")
+                    } else {
+                        FmeManager.sendClientMessage("Config not found: $name")
+                    }
+                    playTabClickSound()
+                }
+                return true
+            }
+            if (tab == Tab.THEMES) {
+                val entries = visibleThemeEntries()
+                if (idx >= entries.size) {
+                    return false
+                }
+                val entry = entries[idx]
+                if (themeSubTab == ThemeSubTab.CUSTOM) {
+                    if (button == 0) {
+                        if (entry == NEW_CUSTOM_THEME_LABEL) {
+                            enterCustomThemeEditor(null)
+                        } else if (FmeManager.applyCustomTheme(entry)) {
+                            playTabClickSound()
+                        }
+                    } else if (button == 1 && entry != NEW_CUSTOM_THEME_LABEL) {
+                        enterCustomThemeEditor(entry)
+                    }
+                } else if (button == 0) {
+                    val theme = themeFromLabel(entry)
+                    if (theme != null) {
+                        FmeManager.applyTheme(theme)
+                        playTabClickSound()
+                    }
+                }
+                return true
+            }
+            if (tab == Tab.OTHER) {
+                val entries = visibleOtherEntries()
+                if (idx >= entries.size) {
+                    return false
+                }
+                val entry = entries[idx]
+                if (button == 0) {
+                    entry.onLeftClick.invoke()
+                    playTabClickSound()
+                } else if (button == 1) {
+                    entry.onRightClick?.invoke()
+                    playTabClickSound()
+                }
+                return true
+            }
+            if (tab == Tab.ALL || tab == Tab.FAVORITES) {
+                val entries = visibleEntries()
+                if (idx >= entries.size) {
+                    return false
+                }
+                val block = entries[idx]
+                if (button == 0) {
+                    FmeManager.setSelectedSource(block)
+                    playTabClickSound()
+                } else if (button == 1) {
+                    FmeManager.toggleFavorite(block)
+                    playTabClickSound()
+                }
+                return true
+            }
+            return false
+        }
+    }
+
     private inner class TabButton(
         x: Int,
         y: Int,
@@ -777,6 +1798,9 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
                 "ALL" -> current == Tab.ALL
                 "FAVORITES" -> current == Tab.FAVORITES
                 "CUSTOM" -> current == Tab.CUSTOM
+                "OTHER" -> current == Tab.OTHER
+                "CONFIGS" -> current == Tab.CONFIGS
+                "THEMES" -> current == Tab.THEMES
                 else -> false
             }
         }
@@ -785,18 +1809,21 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
             val panelColor = panelColor()
             val textColor = FmeManager.getGuiTextColor()
             val accentColor = FmeManager.getGuiAccentTextColor()
-            val pulse = if (activeTab || isHovered) 0.1f * pulse01(900f) else 0f
-            val base = mixColor(panelColor, 0xFF000000.toInt(), 0.2f)
-            val active = mixColor(panelColor, accentColor, 0.2f + pulse)
+            val isBlackWhiteTheme = FmeManager.getTheme() == FmeManager.Theme.BLACK_WHITE
+            val pulse = if (activeTab || isHovered) animationAmount(FmeManager.getTabAnimation(), 900f) else 0f
+            val base = if (isBlackWhiteTheme) 0xFFE6E6E6.toInt() else mixColor(panelColor, 0xFF000000.toInt(), 0.2f)
+            val active = if (isBlackWhiteTheme) 0xFFFFFFFF.toInt() else mixColor(panelColor, accentColor, 0.2f + pulse)
             val bg = if (activeTab || isHovered) active else base
-            val border = mixColor(textColor, panelColor, 0.75f)
-            drawRoundedRect(context, x, y, width, height, bg, border, max(3, (6 * uiScale).roundToInt()))
+            val border = if (isBlackWhiteTheme) 0xFF111111.toInt() else mixColor(textColor, panelColor, 0.75f)
+            drawRoundedRect(context, x, y, width, height, bg, border, elementRadius())
 
             val rawLabel = label.lowercase(Locale.ROOT).replaceFirstChar { it.titlecase(Locale.ROOT) }
             val labelText = trimToWidth(rawLabel, width - 12)
             val labelX = x + max(0, (width - textRenderer.getWidth(labelText)) / 2)
             val labelY = y + max(0, (height - textRenderer.fontHeight) / 2)
-            val labelColor = if (activeTab) textColor else mixColor(textColor, panelColor, 0.55f)
+            val labelColor = if (isBlackWhiteTheme) 0xFF000000.toInt()
+                else if (activeTab) textColor
+                else mixColor(textColor, panelColor, 0.55f)
             context.drawText(textRenderer, Text.literal(labelText), labelX, labelY, labelColor, false)
         }
 
@@ -813,6 +1840,113 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
 
         override fun playDownSound(soundManager: SoundManager) {
             // Use custom tab sound only.
+        }
+    }
+
+    private inner class ThemeSubTabButton(
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        private val label: String,
+        private val onPress: () -> Unit
+    ) : ClickableWidget(x, y, width, height, Text.literal(label)) {
+        private var activeTab = false
+
+        fun updateActive(current: ThemeSubTab) {
+            activeTab = when (label) {
+                "Themes" -> current == ThemeSubTab.THEMES
+                "Custom" -> current == ThemeSubTab.CUSTOM
+                else -> false
+            }
+        }
+
+        override fun renderWidget(context: DrawContext, mouseX: Int, mouseY: Int, delta: Float) {
+            if (!visible) {
+                return
+            }
+            val panelColor = panelColor()
+            val textColor = FmeManager.getGuiTextColor()
+            val accentColor = FmeManager.getGuiAccentTextColor()
+            val isBlackWhiteTheme = FmeManager.getTheme() == FmeManager.Theme.BLACK_WHITE
+            val pulse = if (activeTab || isHovered) animationAmount(FmeManager.getTabAnimation(), 900f) else 0f
+            val base = if (isBlackWhiteTheme) 0xFFE6E6E6.toInt() else mixColor(panelColor, 0xFF000000.toInt(), 0.2f)
+            val active = if (isBlackWhiteTheme) 0xFFFFFFFF.toInt() else mixColor(panelColor, accentColor, 0.2f + pulse)
+            val bg = if (activeTab || isHovered) active else base
+            val border = if (isBlackWhiteTheme) 0xFF111111.toInt() else mixColor(textColor, panelColor, 0.75f)
+            drawRoundedRect(context, x, y, width, height, bg, border, elementRadius())
+
+            val labelText = trimToWidth(label, width - 12)
+            val labelX = x + max(0, (width - textRenderer.getWidth(labelText)) / 2)
+            val labelY = y + max(0, (height - textRenderer.fontHeight) / 2)
+            val labelColor = if (isBlackWhiteTheme) 0xFF000000.toInt()
+                else if (activeTab) textColor
+                else mixColor(textColor, panelColor, 0.55f)
+            context.drawText(textRenderer, Text.literal(labelText), labelX, labelY, labelColor, false)
+        }
+
+        override fun onClick(click: Click, doubleClick: Boolean) {
+            if (click.button() != 0) {
+                return
+            }
+            onPress.invoke()
+        }
+
+        override fun appendClickableNarrations(builder: NarrationMessageBuilder) {
+            appendDefaultNarrations(builder)
+        }
+
+        override fun playDownSound(soundManager: SoundManager) {
+            // Use custom tab sound only.
+        }
+    }
+
+    private inner class ThemeValueSlider(
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        private val label: String,
+        initial: Float,
+        private val min: Float,
+        private val max: Float,
+        private val setter: (Float) -> Unit
+    ) : SliderWidget(x, y, width, height, Text.empty(), normalizeSliderValue(initial, min, max)) {
+
+        override fun updateMessage() {
+            val value = (min + (max - min) * this.value.toFloat()).roundToInt()
+            message = Text.literal("$label: $value")
+        }
+
+        override fun applyValue() {
+            val value = (min + (max - min) * this.value.toFloat()).coerceIn(min, max)
+            setter(value)
+            updateMessage()
+        }
+    }
+
+    private fun normalizeSliderValue(value: Float, min: Float, max: Float): Double {
+        if (max <= min) {
+            return 0.0
+        }
+        return ((value - min) / (max - min)).coerceIn(0f, 1f).toDouble()
+    }
+
+    private data class OtherEntry(
+        val title: String,
+        val value: String? = null,
+        val valueColor: Int? = null,
+        val colorPreview: Int? = null,
+        val tooltip: String? = null,
+        val onLeftClick: () -> Unit,
+        val onRightClick: (() -> Unit)? = null
+    ) {
+        val searchLabel: String = buildString {
+            append(title)
+            if (!value.isNullOrBlank()) {
+                append(' ')
+                append(value)
+            }
         }
     }
 

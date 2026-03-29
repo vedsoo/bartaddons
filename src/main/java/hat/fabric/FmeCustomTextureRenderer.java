@@ -20,6 +20,9 @@ public final class FmeCustomTextureRenderer {
     private static final double MAX_DISTANCE_SQ = 128.0 * 128.0;
     private static final long VALIDATE_TICKS = 200;
     private static final long MISSING_RETRY_TICKS = 40;
+    private static final float UNIFORM_NORMAL_X = 0f;
+    private static final float UNIFORM_NORMAL_Y = -1f;
+    private static final float UNIFORM_NORMAL_Z = 0f;
     private static final Map<String, CachedTexture> TEXTURE_CACHE = new HashMap<>();
     private static final Map<net.minecraft.util.Identifier, VertexConsumer> BASE_BUFFER_CACHE = new HashMap<>();
     private static final ThreadLocal<BlockPos.Mutable> MUTABLE_POS =
@@ -162,7 +165,7 @@ public final class FmeCustomTextureRenderer {
             .texture(1.0f - u, v)
             .overlay(OverlayTexture.DEFAULT_UV)
             .light(light)
-            .normal(entry, nx, ny, nz);
+            .normal(entry, UNIFORM_NORMAL_X, UNIFORM_NORMAL_Y, UNIFORM_NORMAL_Z);
     }
 
     private static int packedLight() {
