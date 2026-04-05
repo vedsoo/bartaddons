@@ -43,6 +43,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 public final class HatClientMod implements ClientModInitializer {
     private static final KeyBinding.Category BART_ADDONS_CATEGORY =
@@ -353,6 +355,13 @@ public final class HatClientMod implements ClientModInitializer {
                             ctx.getSource().sendFeedback(Text.literal("Added and loaded FME config: " + name));
                             return 1;
                         }))))
+                    .then(ClientCommandManager.literal("new")
+                        .executes(ctx -> executeConfigNew(ctx.getSource(), null))
+                        .then(ClientCommandManager.argument("name", StringArgumentType.greedyString())
+                            .executes(ctx -> executeConfigNew(
+                                ctx.getSource(),
+                                ctx.getArgument("name", String.class)
+                            ))))
                 .then(ClientCommandManager.literal("worldedit")
                     .then(ClientCommandManager.literal("pos1")
                         .executes(ctx -> executeWorldEditPosCurrent(ctx.getSource(), 1))
@@ -929,6 +938,21 @@ public final class HatClientMod implements ClientModInitializer {
             () -> downloadImageToCustomTextures(source, resolved),
             DOWNLOAD_EXECUTOR
         );
+        return 1;
+    }
+
+    private static int executeConfigNew(FabricClientCommandSource source, String nameRaw) {
+        String name = nameRaw;
+        if (name == null || name.isBlank()) {
+            String stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+            name = "config_" + stamp;
+        }
+        boolean saved = FmeManager.addConfig(name);
+        if (!saved) {
+            source.sendError(Text.literal("Failed to add config: " + name));
+            return 0;
+        }
+        source.sendFeedback(Text.literal("Added and loaded FME config: " + name));
         return 1;
     }
 

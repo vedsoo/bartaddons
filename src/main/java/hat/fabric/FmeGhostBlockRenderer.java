@@ -25,6 +25,7 @@ import java.util.ArrayList;
 public final class FmeGhostBlockRenderer {
     private static final double MAX_DISTANCE_SQ = 128.0 * 128.0;
     private static final long REBUILD_TICKS = 20;
+    private static final int MAX_RENDER_PER_FRAME = 5000;
     private static final double REBUILD_MOVE_SQ = 4.0;
     private static final int MAX_RENDER_BLOCKS = 20000;
     private static final ThreadLocal<BlockPos.Mutable> MUTABLE_POS =
@@ -38,6 +39,7 @@ public final class FmeGhostBlockRenderer {
     private static int lastCamBlockY = Integer.MIN_VALUE;
     private static int lastCamBlockZ = Integer.MIN_VALUE;
     private static long lastRebuildTick = -1;
+    private static int renderCursor = 0;
 
     private FmeGhostBlockRenderer() {
     }
@@ -65,8 +67,10 @@ public final class FmeGhostBlockRenderer {
         int camY = (int) Math.floor(camPos.y);
         int camZ = (int) Math.floor(camPos.z);
         long now = client.world.getTime();
-        if (shouldRebuildCache(camX, camY, camZ, now)) {
-            rebuildCache(FmeManager.airGhostPositionsView(), camPos);
+        Set<Long> ghostPositions = FmeManager.airGhostPositionsView();
+        long rebuildInterval = rebuildIntervalFor(ghostPositions.size());
+        if (shouldRebuildCache(camX, camY, camZ, now, rebuildInterval)) {
+            rebuildCache(ghostPositions, camPos);
             lastCamBlockX = camX;
             lastCamBlockY = camY;
             lastCamBlockZ = camZ;
@@ -77,7 +81,15 @@ public final class FmeGhostBlockRenderer {
         }
 
         BlockPos.Mutable pos = MUTABLE_POS.get();
-        for (Long key : CACHED_POSITIONS) {
+        int total = CACHED_POSITIONS.size();
+        int toRender = Math.min(MAX_RENDER_PER_FRAME, total);
+        int start = renderCursor % total;
+        for (int i = 0; i < toRender; i++) {
+            int idx = start + i;
+            if (idx >= total) {
+                idx -= total;
+            }
+            Long key = CACHED_POSITIONS.get(idx);
             pos.set(key);
             double dx = pos.getX() + 0.5 - camPos.x;
             double dy = pos.getY() + 0.5 - camPos.y;
@@ -107,19 +119,36 @@ public final class FmeGhostBlockRenderer {
             modelRenderer.render(client.world, parts, mapped, pos, matrices, vc, true, OverlayTexture.DEFAULT_UV);
             matrices.pop();
         }
+        renderCursor = (start + toRender) % total;
     }
 
-    private static boolean shouldRebuildCache(int camX, int camY, int camZ, long now) {
+    private static boolean shouldRebuildCache(int camX, int camY, int camZ, long now, long rebuildInterval) {
         if (lastRebuildTick < 0) {
             return true;
         }
-        if (now - lastRebuildTick >= REBUILD_TICKS) {
+        if (now - lastRebuildTick >= rebuildInterval) {
             return true;
         }
         int dx = camX - lastCamBlockX;
         int dy = camY - lastCamBlockY;
         int dz = camZ - lastCamBlockZ;
         return (dx * dx + dy * dy + dz * dz) >= REBUILD_MOVE_SQ;
+    }
+
+    private static long rebuildIntervalFor(int size) {
+        if (size >= 200_000) {
+            return 120;
+        }
+        if (size >= 100_000) {
+            return 80;
+        }
+        if (size >= 50_000) {
+            return 60;
+        }
+        if (size >= 20_000) {
+            return 40;
+        }
+        return REBUILD_TICKS;
     }
 
     private static void rebuildCache(Set<Long> ghostPositions, Vec3d camPos) {
