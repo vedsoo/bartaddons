@@ -28,6 +28,9 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public final class FmeManager {
     private static final Path SAVE_PATH = FabricLoader.getInstance().getConfigDir().resolve("hat-fme.json");
@@ -35,11 +38,13 @@ public final class FmeManager {
     private static final Path CONFIG_DIR = FabricLoader.getInstance().getConfigDir()
         .resolve("fme")
         .resolve("config");
+    private static final Path CUSTOM_THEME_DIR = CONFIG_DIR.resolve("custom_themes");
     private static Path currentSavePath = SAVE_PATH;
     private static final Map<Long, Block> POSITION_REPLACEMENTS = new HashMap<>();
     private static final Map<Long, String> POSITION_CUSTOM_TEXTURES = new HashMap<>();
     private static final Map<Long, Block> POSITION_CUSTOM_TEXTURE_SOURCES = new HashMap<>();
     private static final Map<Long, Integer> POSITION_ROTATIONS = new HashMap<>();
+    private static final Map<Long, BlockState> POSITION_STATE_OVERRIDES = new HashMap<>();
     private static final Map<Long, Block> LAST_REPLACE_UNDO = new HashMap<>();
     private static boolean lastReplaceWasCustom = false;
     private static final Map<RemapKey, BlockState> REMAP_STATE_CACHE = new HashMap<>();
@@ -56,11 +61,18 @@ public final class FmeManager {
     private static int selectedRotation = 0;
     private static int openScreenInTicks = -1;
     private static ScreenMode openScreenMode = ScreenMode.DEFAULT;
-    private static int guiPanelColor = 0xFF0F1B2A;
-    private static int guiBorderColor = 0xFF274B7A;
-    private static int guiTextColor = 0xFFE3EDF7;
-    private static int guiAccentTextColor = 0xFF8ABEFF;
-    private static int selectionBoxColor = 0x66406BA8;
+    private static int guiPanelColor = 0xFFF5F5F5;
+    private static int guiBorderColor = 0xFF000000;
+    private static int guiTextColor = 0xFF000000;
+    private static int guiAccentTextColor = 0xFF111111;
+    private static int selectionBoxColor = 0x66000000;
+    private static ThemeAnimation tabAnimation = ThemeAnimation.PULSE;
+    private static ThemeAnimation selectionAnimation = ThemeAnimation.PULSE;
+    private static float panelCornerRadius = 10.0f;
+    private static float elementCornerRadius = 6.0f;
+    private static boolean customThemeActive = false;
+    private static String customThemeName;
+    private static CustomTheme customTheme;
     private static float guiScale = 1.5f;
     private static float guiBlockBrightness = 2.0f;
     private static boolean autoSaveEnabled = true;
@@ -191,6 +203,7 @@ public final class FmeManager {
             POSITION_CUSTOM_TEXTURE_SOURCES.put(key, target);
             POSITION_REPLACEMENTS.remove(key);
             POSITION_ROTATIONS.put(key, selectedRotation);
+            POSITION_STATE_OVERRIDES.remove(key);
             if (target.getDefaultState().isAir()) {
                 AIR_GHOST_POSITIONS.add(key);
             } else {
@@ -205,6 +218,7 @@ public final class FmeManager {
             AIR_GHOST_POSITIONS.remove(key);
             POSITION_CUSTOM_TEXTURES.remove(key);
             POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
+            POSITION_STATE_OVERRIDES.remove(key);
             markChanged(pos);
             return true;
         }
@@ -212,6 +226,7 @@ public final class FmeManager {
         POSITION_CUSTOM_TEXTURES.remove(key);
         POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
         POSITION_ROTATIONS.put(key, selectedRotation);
+        POSITION_STATE_OVERRIDES.remove(key);
         if (target.getDefaultState().isAir()) {
             AIR_GHOST_POSITIONS.add(key);
         } else {
@@ -232,6 +247,7 @@ public final class FmeManager {
             AIR_GHOST_POSITIONS.remove(key);
             POSITION_CUSTOM_TEXTURES.remove(key);
             POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
+            POSITION_STATE_OVERRIDES.remove(key);
             markChanged(pos);
             return true;
         }
@@ -239,6 +255,7 @@ public final class FmeManager {
         POSITION_CUSTOM_TEXTURES.remove(key);
         POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
         POSITION_ROTATIONS.put(key, Math.floorMod(rotation, 4));
+        POSITION_STATE_OVERRIDES.remove(key);
         if (target.getDefaultState().isAir()) {
             AIR_GHOST_POSITIONS.add(key);
         } else {
@@ -257,6 +274,7 @@ public final class FmeManager {
         boolean removedCustom = POSITION_CUSTOM_TEXTURES.remove(key) != null;
         POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
         AIR_GHOST_POSITIONS.remove(key);
+        POSITION_STATE_OVERRIDES.remove(key);
         if (removed || removedCustom) {
             POSITION_ROTATIONS.remove(key);
             markChanged(pos);
@@ -270,6 +288,7 @@ public final class FmeManager {
         boolean removedCustom = POSITION_CUSTOM_TEXTURES.remove(key) != null;
         POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
         AIR_GHOST_POSITIONS.remove(key);
+        POSITION_STATE_OVERRIDES.remove(key);
         if (removed || removedCustom) {
             POSITION_ROTATIONS.remove(key);
             markChanged(null);
@@ -399,6 +418,13 @@ public final class FmeManager {
             }
             return net.minecraft.block.Blocks.AIR.getDefaultState();
         }
+        BlockState override = POSITION_STATE_OVERRIDES.get(key);
+        if (override != null) {
+            if (original.isAir() && !AIR_GHOST_POSITIONS.contains(key)) {
+                return original;
+            }
+            return override;
+        }
         Block mapped = POSITION_REPLACEMENTS.get(key);
         if (mapped == null) {
             return original;
@@ -495,6 +521,145 @@ public final class FmeManager {
         return Collections.unmodifiableSet(CUSTOM_TEXTURE_FAVORITES);
     }
 
+    public static List<String> listConfigNames() {
+        ensureConfigDir();
+        if (!Files.exists(CONFIG_DIR)) {
+            return Collections.emptyList();
+        }
+        try (Stream<Path> stream = Files.list(CONFIG_DIR)) {
+            return stream
+                .filter(Files::isRegularFile)
+                .map(path -> path.getFileName().toString())
+                .filter(name -> name.toLowerCase(Locale.ROOT).endsWith(".json"))
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .collect(Collectors.toList());
+        } catch (IOException ignored) {
+            return Collections.emptyList();
+        }
+    }
+
+    public static List<String> listCustomThemeNames() {
+        ensureCustomThemeDir();
+        if (!Files.exists(CUSTOM_THEME_DIR)) {
+            return Collections.emptyList();
+        }
+        try (Stream<Path> files = Files.list(CUSTOM_THEME_DIR)) {
+            return files
+                .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".json"))
+                .map(path -> {
+                    String name = path.getFileName().toString();
+                    int dot = name.lastIndexOf('.');
+                    return dot > 0 ? name.substring(0, dot) : name;
+                })
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .collect(Collectors.toList());
+        } catch (IOException ignored) {
+            return Collections.emptyList();
+        }
+    }
+
+    public static CustomTheme loadCustomTheme(String name) {
+        Path path = resolveCustomThemePath(name);
+        if (path == null || !Files.exists(path)) {
+            return null;
+        }
+        try {
+            String raw = Files.readString(path, StandardCharsets.UTF_8);
+            JsonObject root = JsonParser.parseString(raw).getAsJsonObject();
+            return customThemeFromJson(root, name);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    public static boolean saveCustomTheme(CustomTheme theme) {
+        if (theme == null || theme.name == null || theme.name.isBlank()) {
+            return false;
+        }
+        ensureCustomThemeDir();
+        Path path = resolveCustomThemePath(theme.name);
+        if (path == null) {
+            return false;
+        }
+        try {
+            JsonObject root = customThemeToJson(theme);
+            Files.createDirectories(path.getParent());
+            Files.writeString(path, root.toString(), StandardCharsets.UTF_8);
+            return true;
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
+    public static boolean deleteCustomTheme(String name) {
+        Path path = resolveCustomThemePath(name);
+        if (path == null || !Files.exists(path)) {
+            return false;
+        }
+        try {
+            Files.deleteIfExists(path);
+            if (name != null && name.equalsIgnoreCase(customThemeName)) {
+                customThemeActive = false;
+                customThemeName = null;
+                customTheme = null;
+            }
+            return true;
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
+    public static boolean applyCustomTheme(String name) {
+        CustomTheme theme = loadCustomTheme(name);
+        if (theme == null) {
+            return false;
+        }
+        applyCustomTheme(theme);
+        return true;
+    }
+
+    public static void applyCustomTheme(CustomTheme theme) {
+        if (theme == null) {
+            return;
+        }
+        guiPanelColor = theme.panelColor;
+        guiBorderColor = theme.borderColor;
+        guiTextColor = theme.textColor;
+        guiAccentTextColor = theme.accentTextColor;
+        selectionBoxColor = theme.selectionColor;
+        tabAnimation = theme.tabAnimation != null ? theme.tabAnimation : ThemeAnimation.PULSE;
+        selectionAnimation = theme.selectionAnimation != null ? theme.selectionAnimation : ThemeAnimation.PULSE;
+        panelCornerRadius = theme.panelRadius > 0 ? theme.panelRadius : 10.0f;
+        elementCornerRadius = theme.elementRadius > 0 ? theme.elementRadius : 6.0f;
+        customThemeActive = true;
+        customThemeName = theme.name;
+        customTheme = theme;
+        recordCustomThemeState(theme.name);
+        save();
+    }
+
+    public static CustomTheme snapshotCurrentTheme(String name) {
+        CustomTheme theme = new CustomTheme();
+        theme.name = name;
+        theme.panelColor = guiPanelColor;
+        theme.borderColor = guiBorderColor;
+        theme.textColor = guiTextColor;
+        theme.accentTextColor = guiAccentTextColor;
+        theme.selectionColor = selectionBoxColor;
+        theme.gradientStart = guiPanelColor;
+        theme.gradientEnd = guiPanelColor;
+        theme.flatTheme = true;
+        theme.panelRadius = panelCornerRadius;
+        theme.elementRadius = elementCornerRadius;
+        theme.tabAnimation = tabAnimation;
+        theme.selectionAnimation = selectionAnimation;
+        return theme;
+    }
+
+    public static Path getConfigDir() {
+        return CONFIG_DIR;
+    }
+
     public static Map<Block, Block> replacementsView() {
         return Collections.emptyMap();
     }
@@ -573,6 +738,15 @@ public final class FmeManager {
 
     public static void load() {
         ensureConfigDir();
+        String stateCustomTheme = readCustomThemeFromState();
+        if (stateCustomTheme != null && applyCustomTheme(stateCustomTheme)) {
+            // Custom theme applied from state.
+        } else {
+            Theme stateTheme = readThemeFromState();
+            if (stateTheme != null) {
+                applyThemeInternal(stateTheme);
+            }
+        }
         Path lastConfig = readLastConfigPath();
         if (lastConfig != null && Files.exists(lastConfig)) {
             boolean loaded = loadFromPath(lastConfig, false, false);
@@ -655,6 +829,7 @@ public final class FmeManager {
             boolean loaded = applyConfig(root);
             if (refreshWorld && loaded) {
                 refreshWorld(null);
+                reloadChunks();
             }
             return loaded;
         } catch (Throwable ignored) {
@@ -696,6 +871,19 @@ public final class FmeManager {
         }
         if (root.has("selectedRotation")) {
             selectedRotation = Math.floorMod(root.get("selectedRotation").getAsInt(), 4);
+        }
+        if (root.has("customTheme")) {
+            String customName = root.get("customTheme").getAsString();
+            if (customName != null && !customName.isBlank()) {
+                applyCustomTheme(customName);
+            }
+        }
+        if (!customThemeActive && root.has("theme")) {
+            try {
+                Theme theme = Theme.valueOf(root.get("theme").getAsString().trim().toUpperCase(Locale.ROOT));
+                applyThemeInternal(theme);
+            } catch (Exception ignored) {
+            }
         }
         guiScale = 1.5f;
         if (root.has("blockBrightness")) {
@@ -971,6 +1159,10 @@ public final class FmeManager {
         JsonObject root = new JsonObject();
         root.addProperty("enabled", enabled);
         root.addProperty("editMode", editMode);
+        root.addProperty("theme", getTheme().name());
+        if (customThemeActive && customThemeName != null && !customThemeName.isBlank()) {
+            root.addProperty("customTheme", customThemeName);
+        }
         root.addProperty("selectedSource", Registries.BLOCK.getId(selectedSource).toString());
         root.addProperty("selectedSourceType", selectedSourceType.name());
         if (selectedCustomTexture != null) {
@@ -1026,11 +1218,101 @@ public final class FmeManager {
         return root;
     }
 
+    private static JsonObject customThemeToJson(CustomTheme theme) {
+        JsonObject root = new JsonObject();
+        root.addProperty("name", theme.name);
+        root.addProperty("panelColor", theme.panelColor);
+        root.addProperty("borderColor", theme.borderColor);
+        root.addProperty("textColor", theme.textColor);
+        root.addProperty("accentTextColor", theme.accentTextColor);
+        root.addProperty("selectionColor", theme.selectionColor);
+        root.addProperty("gradientStart", theme.gradientStart);
+        root.addProperty("gradientEnd", theme.gradientEnd);
+        root.addProperty("flatTheme", theme.flatTheme);
+        root.addProperty("panelRadius", theme.panelRadius);
+        root.addProperty("elementRadius", theme.elementRadius);
+        root.addProperty("tabAnimation", (theme.tabAnimation == null ? ThemeAnimation.PULSE : theme.tabAnimation).name());
+        root.addProperty("selectionAnimation", (theme.selectionAnimation == null ? ThemeAnimation.PULSE : theme.selectionAnimation).name());
+        return root;
+    }
+
+    private static CustomTheme customThemeFromJson(JsonObject root, String fallbackName) {
+        if (root == null) {
+            return null;
+        }
+        CustomTheme theme = new CustomTheme();
+        theme.name = readString(root, "name", fallbackName);
+        theme.panelColor = readInt(root, "panelColor", 0xFF0F1B2A);
+        theme.borderColor = readInt(root, "borderColor", 0xFF274B7A);
+        theme.textColor = readInt(root, "textColor", 0xFFE3EDF7);
+        theme.accentTextColor = readInt(root, "accentTextColor", 0xFF8ABEFF);
+        theme.selectionColor = readInt(root, "selectionColor", 0x66406BA8);
+        theme.gradientStart = readInt(root, "gradientStart", theme.panelColor);
+        theme.gradientEnd = readInt(root, "gradientEnd", theme.panelColor);
+        theme.flatTheme = readBoolean(root, "flatTheme", true);
+        theme.panelRadius = readFloat(root, "panelRadius", 10.0f);
+        theme.elementRadius = readFloat(root, "elementRadius", 6.0f);
+        theme.tabAnimation = readAnimation(root, "tabAnimation", ThemeAnimation.PULSE);
+        theme.selectionAnimation = readAnimation(root, "selectionAnimation", ThemeAnimation.PULSE);
+        return theme;
+    }
+
+    private static String readString(JsonObject root, String key, String fallback) {
+        if (root.has(key)) {
+            String value = root.get(key).getAsString();
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return fallback;
+    }
+
+    private static int readInt(JsonObject root, String key, int fallback) {
+        if (root.has(key)) {
+            try {
+                return root.get(key).getAsInt();
+            } catch (Exception ignored) {
+            }
+        }
+        return fallback;
+    }
+
+    private static float readFloat(JsonObject root, String key, float fallback) {
+        if (root.has(key)) {
+            try {
+                return root.get(key).getAsFloat();
+            } catch (Exception ignored) {
+            }
+        }
+        return fallback;
+    }
+
+    private static boolean readBoolean(JsonObject root, String key, boolean fallback) {
+        if (root.has(key)) {
+            try {
+                return root.get(key).getAsBoolean();
+            } catch (Exception ignored) {
+            }
+        }
+        return fallback;
+    }
+
+    private static ThemeAnimation readAnimation(JsonObject root, String key, ThemeAnimation fallback) {
+        if (root.has(key)) {
+            try {
+                return ThemeAnimation.valueOf(root.get(key).getAsString().trim().toUpperCase(Locale.ROOT));
+            } catch (Exception ignored) {
+            }
+        }
+        return fallback;
+    }
+
     private static void clearState(boolean resetDefaults) {
         POSITION_REPLACEMENTS.clear();
         POSITION_CUSTOM_TEXTURES.clear();
         POSITION_CUSTOM_TEXTURE_SOURCES.clear();
         POSITION_ROTATIONS.clear();
+        POSITION_STATE_OVERRIDES.clear();
         AIR_GHOST_POSITIONS.clear();
         FAVORITES.clear();
         CUSTOM_TEXTURE_FAVORITES.clear();
@@ -1042,11 +1324,18 @@ public final class FmeManager {
             selectedSourceType = SelectedSourceType.BLOCK;
             selectedCustomTexture = null;
             selectedRotation = 0;
-            guiPanelColor = 0xFF0F1B2A;
-            guiBorderColor = 0xFF274B7A;
-            guiTextColor = 0xFFE3EDF7;
-            guiAccentTextColor = 0xFF8ABEFF;
-            selectionBoxColor = 0x66406BA8;
+            guiPanelColor = 0xFFF5F5F5;
+            guiBorderColor = 0xFF000000;
+            guiTextColor = 0xFF000000;
+            guiAccentTextColor = 0xFF111111;
+            selectionBoxColor = 0x66000000;
+            tabAnimation = ThemeAnimation.PULSE;
+            selectionAnimation = ThemeAnimation.PULSE;
+            panelCornerRadius = 10.0f;
+            elementCornerRadius = 6.0f;
+            customThemeActive = false;
+            customThemeName = null;
+            customTheme = null;
             guiScale = 1.5f;
             guiBlockBrightness = 2.0f;
             autoSaveEnabled = true;
@@ -1105,13 +1394,25 @@ public final class FmeManager {
         return path.normalize();
     }
 
+    private static Path resolveCustomThemePath(String nameOrPath) {
+        if (nameOrPath == null || nameOrPath.isBlank()) {
+            return null;
+        }
+        String fileName = nameOrPath.trim();
+        if (!fileName.toLowerCase(Locale.ROOT).endsWith(".json")) {
+            fileName = fileName + ".json";
+        }
+        ensureCustomThemeDir();
+        return CUSTOM_THEME_DIR.resolve(fileName).normalize();
+    }
+
     private static void recordLastConfigPath(Path path) {
         if (path == null) {
             return;
         }
         try {
             Path normalized = path.toAbsolutePath().normalize();
-            JsonObject root = new JsonObject();
+            JsonObject root = readStateRoot();
             root.addProperty("lastConfig", normalized.toString());
             Files.createDirectories(STATE_PATH.getParent());
             Files.writeString(STATE_PATH, root.toString(), StandardCharsets.UTF_8);
@@ -1124,8 +1425,7 @@ public final class FmeManager {
             return null;
         }
         try {
-            String raw = Files.readString(STATE_PATH, StandardCharsets.UTF_8);
-            JsonObject root = JsonParser.parseString(raw).getAsJsonObject();
+            JsonObject root = readStateRoot();
             if (!root.has("lastConfig")) {
                 return null;
             }
@@ -1139,9 +1439,87 @@ public final class FmeManager {
         }
     }
 
+    private static void recordThemeState(Theme theme) {
+        if (theme == null) {
+            return;
+        }
+        try {
+            JsonObject root = readStateRoot();
+            root.addProperty("theme", theme.name());
+            root.remove("customTheme");
+            Files.createDirectories(STATE_PATH.getParent());
+            Files.writeString(STATE_PATH, root.toString(), StandardCharsets.UTF_8);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static void recordCustomThemeState(String name) {
+        if (name == null || name.isBlank()) {
+            return;
+        }
+        try {
+            JsonObject root = readStateRoot();
+            root.addProperty("customTheme", name);
+            Files.createDirectories(STATE_PATH.getParent());
+            Files.writeString(STATE_PATH, root.toString(), StandardCharsets.UTF_8);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static Theme readThemeFromState() {
+        try {
+            JsonObject root = readStateRoot();
+            if (!root.has("theme")) {
+                return null;
+            }
+            String value = root.get("theme").getAsString();
+            if (value == null || value.isBlank()) {
+                return null;
+            }
+            return Theme.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static String readCustomThemeFromState() {
+        try {
+            JsonObject root = readStateRoot();
+            if (!root.has("customTheme")) {
+                return null;
+            }
+            String value = root.get("customTheme").getAsString();
+            if (value == null || value.isBlank()) {
+                return null;
+            }
+            return value.trim();
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static JsonObject readStateRoot() {
+        if (!Files.exists(STATE_PATH)) {
+            return new JsonObject();
+        }
+        try {
+            String raw = Files.readString(STATE_PATH, StandardCharsets.UTF_8);
+            return JsonParser.parseString(raw).getAsJsonObject();
+        } catch (Throwable ignored) {
+            return new JsonObject();
+        }
+    }
+
     private static void ensureConfigDir() {
         try {
             Files.createDirectories(CONFIG_DIR);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static void ensureCustomThemeDir() {
+        try {
+            Files.createDirectories(CUSTOM_THEME_DIR);
         } catch (IOException ignored) {
         }
     }
@@ -1370,12 +1748,10 @@ public final class FmeManager {
                     if (pos == null) {
                         continue;
                     }
-        long key = toConfigKey(pos);
+                    long key = toConfigKey(pos);
                     POSITION_REPLACEMENTS.put(key, source);
                     POSITION_ROTATIONS.put(key, rotation);
-                    if (source.getDefaultState().isAir()) {
-                        AIR_GHOST_POSITIONS.add(key);
-                    }
+                    AIR_GHOST_POSITIONS.add(key);
                     loadedAny = true;
                 }
             }
@@ -1666,34 +2042,16 @@ public final class FmeManager {
     }
 
     private static int rotationFromState(String stateRaw) {
-        if (stateRaw == null) {
+        String facing = parseStateProperty(stateRaw, "facing");
+        if (facing == null) {
             return 0;
         }
-        int bracket = stateRaw.indexOf('[');
-        int end = stateRaw.lastIndexOf(']');
-        if (bracket == -1 || end <= bracket) {
-            return 0;
-        }
-        String props = stateRaw.substring(bracket + 1, end);
-        String[] parts = props.split(",");
-        for (String part : parts) {
-            String[] kv = part.split("=", 2);
-            if (kv.length != 2) {
-                continue;
-            }
-            String key = kv[0].trim().toLowerCase(Locale.ROOT);
-            String value = kv[1].trim().toLowerCase(Locale.ROOT);
-            if (!"facing".equals(key)) {
-                continue;
-            }
-            return switch (value) {
-                case "east" -> 1;
-                case "south" -> 2;
-                case "west" -> 3;
-                default -> 0;
-            };
-        }
-        return 0;
+        return switch (facing) {
+            case "east" -> 1;
+            case "south" -> 2;
+            case "west" -> 3;
+            default -> 0;
+        };
     }
 
     private static void refreshWorld(BlockPos pos) {
@@ -1712,6 +2070,17 @@ public final class FmeManager {
             return;
         }
         client.worldRenderer.scheduleTerrainUpdate();
+    }
+
+    private static void reloadChunks() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.worldRenderer == null) {
+            return;
+        }
+        client.execute(() -> {
+            client.worldRenderer.reload();
+            client.worldRenderer.scheduleTerrainUpdate();
+        });
     }
 
 
@@ -1740,6 +2109,52 @@ public final class FmeManager {
         GUI_SETTINGS
     }
 
+    public enum Theme {
+        WHITE,
+        BLACK_WHITE,
+        BLUE,
+        PURPLE,
+        RED,
+        PASTEL_MINT,
+        PASTEL_PEACH,
+        PASTEL_LAVENDER,
+        PASTEL_SKY,
+        PASTEL_ROSE,
+        PASTEL_BUTTER,
+        PASTEL_AQUA,
+        MOONWALKER,
+        VIOLET,
+        FEMBOY,
+        ARGON,
+        MOSS,
+        HAZEL
+    }
+
+    public enum ThemeAnimation {
+        NONE,
+        PULSE,
+        GLOW,
+        SLIDE,
+        BOUNCE,
+        FADE
+    }
+
+    public static final class CustomTheme {
+        public String name;
+        public int panelColor;
+        public int borderColor;
+        public int textColor;
+        public int accentTextColor;
+        public int selectionColor;
+        public int gradientStart;
+        public int gradientEnd;
+        public boolean flatTheme;
+        public float panelRadius;
+        public float elementRadius;
+        public ThemeAnimation tabAnimation;
+        public ThemeAnimation selectionAnimation;
+    }
+
     public static int getGuiPanelColor() {
         return guiPanelColor;
     }
@@ -1760,6 +2175,310 @@ public final class FmeManager {
         return selectionBoxColor;
     }
 
+    public static ThemeAnimation getTabAnimation() {
+        return tabAnimation;
+    }
+
+    public static ThemeAnimation getSelectionAnimation() {
+        return selectionAnimation;
+    }
+
+    public static float getPanelCornerRadius() {
+        return panelCornerRadius;
+    }
+
+    public static float getElementCornerRadius() {
+        return elementCornerRadius;
+    }
+
+    public static boolean isCustomThemeActive() {
+        return customThemeActive;
+    }
+
+    public static String getCustomThemeName() {
+        return customThemeName;
+    }
+
+    public static CustomTheme getCustomTheme() {
+        return customThemeActive ? customTheme : null;
+    }
+
+    public static Theme getTheme() {
+        if (guiPanelColor == 0xFFF5F5F5
+            && guiBorderColor == 0xFF000000
+            && guiTextColor == 0xFF000000
+            && guiAccentTextColor == 0xFF111111
+            && selectionBoxColor == 0x66000000) {
+            return Theme.WHITE;
+        }
+        if (guiPanelColor == 0xFF0A0A0A
+            && guiBorderColor == 0xFFFFFFFF
+            && guiTextColor == 0xFFFFFFFF
+            && guiAccentTextColor == 0xFFFFFFFF
+            && selectionBoxColor == 0x66FFFFFF) {
+            return Theme.BLACK_WHITE;
+        }
+        if (guiPanelColor == 0xFF2A1238
+            && guiBorderColor == 0xFF5E2C83
+            && guiTextColor == 0xFFF2E9FF
+            && guiAccentTextColor == 0xFFB98CFF
+            && selectionBoxColor == 0x664C2A73) {
+            return Theme.PURPLE;
+        }
+        if (guiPanelColor == 0xFF1A0000
+            && guiBorderColor == 0xFF000000
+            && guiTextColor == 0xFFFFFFFF
+            && guiAccentTextColor == 0xFFFF4D4D
+            && selectionBoxColor == 0x66000000) {
+            return Theme.RED;
+        }
+        if (guiPanelColor == 0xFFF3FFFA
+            && guiBorderColor == 0xFF7DBEA3
+            && guiTextColor == 0xFF1E3A34
+            && guiAccentTextColor == 0xFF58A98C
+            && selectionBoxColor == 0x6686C7AD) {
+            return Theme.PASTEL_MINT;
+        }
+        if (guiPanelColor == 0xFFFFF6F1
+            && guiBorderColor == 0xFFE1A38D
+            && guiTextColor == 0xFF4A2E2A
+            && guiAccentTextColor == 0xFFE07A5F
+            && selectionBoxColor == 0x66E3B3A0) {
+            return Theme.PASTEL_PEACH;
+        }
+        if (guiPanelColor == 0xFFFAF5FF
+            && guiBorderColor == 0xFFB79DE5
+            && guiTextColor == 0xFF2F2341
+            && guiAccentTextColor == 0xFF9B7EDC
+            && selectionBoxColor == 0x66C6B0EB) {
+            return Theme.PASTEL_LAVENDER;
+        }
+        if (guiPanelColor == 0xFFF4FAFF
+            && guiBorderColor == 0xFF8DB6E1
+            && guiTextColor == 0xFF203447
+            && guiAccentTextColor == 0xFF6EA7D9
+            && selectionBoxColor == 0x669AC3E9) {
+            return Theme.PASTEL_SKY;
+        }
+        if (guiPanelColor == 0xFFFFF7F8
+            && guiBorderColor == 0xFFE7A9B8
+            && guiTextColor == 0xFF4A2C33
+            && guiAccentTextColor == 0xFFD97B8D
+            && selectionBoxColor == 0x66E6B7C4) {
+            return Theme.PASTEL_ROSE;
+        }
+        if (guiPanelColor == 0xFFFFFDF4
+            && guiBorderColor == 0xFFE8D99A
+            && guiTextColor == 0xFF4A3E20
+            && guiAccentTextColor == 0xFFD6B95B
+            && selectionBoxColor == 0x66E8D8A6) {
+            return Theme.PASTEL_BUTTER;
+        }
+        if (guiPanelColor == 0xFFF1FFFD
+            && guiBorderColor == 0xFF86D8C8
+            && guiTextColor == 0xFF1E3A35
+            && guiAccentTextColor == 0xFF5ABFAE
+            && selectionBoxColor == 0x66A8E1D6) {
+            return Theme.PASTEL_AQUA;
+        }
+        if (guiPanelColor == 0xFF152331
+            && guiBorderColor == 0xFF000000
+            && guiTextColor == 0xFFFFFFFF
+            && guiAccentTextColor == 0xFF9DB3C7
+            && selectionBoxColor == 0x66000000) {
+            return Theme.MOONWALKER;
+        }
+        if (guiPanelColor == 0xFF654EA3
+            && guiBorderColor == 0xFF3E2C6D
+            && guiTextColor == 0xFFFFFFFF
+            && guiAccentTextColor == 0xFFEAAFC8
+            && selectionBoxColor == 0x66574591) {
+            return Theme.VIOLET;
+        }
+        if (guiPanelColor == 0xFFCF62A9
+            && guiBorderColor == 0xFF000000
+            && guiTextColor == 0xFFFFFFFF
+            && guiAccentTextColor == 0xFF58CEF8
+            && selectionBoxColor == 0x66000000) {
+            return Theme.FEMBOY;
+        }
+        if (guiPanelColor == 0xFF03001E
+            && guiBorderColor == 0xFF000000
+            && guiTextColor == 0xFFFFFFFF
+            && guiAccentTextColor == 0xFFEC38BC
+            && selectionBoxColor == 0x66000000) {
+            return Theme.ARGON;
+        }
+        if (guiPanelColor == 0xFF134E5E
+            && guiBorderColor == 0xFF0B2E37
+            && guiTextColor == 0xFFFFFFFF
+            && guiAccentTextColor == 0xFF71B280
+            && selectionBoxColor == 0x66000000) {
+            return Theme.MOSS;
+        }
+        if (guiPanelColor == 0xFF77A1D3
+            && guiBorderColor == 0xFF4B6F9C
+            && guiTextColor == 0xFF0D1E2D
+            && guiAccentTextColor == 0xFFE684AE
+            && selectionBoxColor == 0x6677A1D3) {
+            return Theme.HAZEL;
+        }
+        return Theme.BLUE;
+    }
+
+    public static void applyTheme(Theme theme) {
+        if (theme == null) {
+            return;
+        }
+        customThemeActive = false;
+        customThemeName = null;
+        customTheme = null;
+        applyThemeInternal(theme);
+        recordThemeState(theme);
+        save();
+    }
+
+    private static void applyThemeInternal(Theme theme) {
+        if (theme == null) {
+            return;
+        }
+        customThemeActive = false;
+        customThemeName = null;
+        customTheme = null;
+        tabAnimation = ThemeAnimation.PULSE;
+        selectionAnimation = ThemeAnimation.PULSE;
+        panelCornerRadius = 10.0f;
+        elementCornerRadius = 6.0f;
+        switch (theme) {
+            case WHITE -> {
+                guiPanelColor = 0xFFF5F5F5;
+                guiBorderColor = 0xFF000000;
+                guiTextColor = 0xFF000000;
+                guiAccentTextColor = 0xFF111111;
+                selectionBoxColor = 0x66000000;
+            }
+            case BLACK_WHITE -> {
+                guiPanelColor = 0xFF0A0A0A;
+                guiBorderColor = 0xFFFFFFFF;
+                guiTextColor = 0xFFFFFFFF;
+                guiAccentTextColor = 0xFFFFFFFF;
+                selectionBoxColor = 0x66FFFFFF;
+            }
+            case BLUE -> {
+                guiPanelColor = 0xFF0F1B2A;
+                guiBorderColor = 0xFF274B7A;
+                guiTextColor = 0xFFE3EDF7;
+                guiAccentTextColor = 0xFF8ABEFF;
+                selectionBoxColor = 0x66406BA8;
+            }
+            case PURPLE -> {
+                guiPanelColor = 0xFF2A1238;
+                guiBorderColor = 0xFF5E2C83;
+                guiTextColor = 0xFFF2E9FF;
+                guiAccentTextColor = 0xFFB98CFF;
+                selectionBoxColor = 0x664C2A73;
+            }
+            case RED -> {
+                guiPanelColor = 0xFF1A0000;
+                guiBorderColor = 0xFF000000;
+                guiTextColor = 0xFFFFFFFF;
+                guiAccentTextColor = 0xFFFF4D4D;
+                selectionBoxColor = 0x66000000;
+            }
+            case PASTEL_MINT -> {
+                guiPanelColor = 0xFFF3FFFA;
+                guiBorderColor = 0xFF7DBEA3;
+                guiTextColor = 0xFF1E3A34;
+                guiAccentTextColor = 0xFF58A98C;
+                selectionBoxColor = 0x6686C7AD;
+            }
+            case PASTEL_PEACH -> {
+                guiPanelColor = 0xFFFFF6F1;
+                guiBorderColor = 0xFFE1A38D;
+                guiTextColor = 0xFF4A2E2A;
+                guiAccentTextColor = 0xFFE07A5F;
+                selectionBoxColor = 0x66E3B3A0;
+            }
+            case PASTEL_LAVENDER -> {
+                guiPanelColor = 0xFFFAF5FF;
+                guiBorderColor = 0xFFB79DE5;
+                guiTextColor = 0xFF2F2341;
+                guiAccentTextColor = 0xFF9B7EDC;
+                selectionBoxColor = 0x66C6B0EB;
+            }
+            case PASTEL_SKY -> {
+                guiPanelColor = 0xFFF4FAFF;
+                guiBorderColor = 0xFF8DB6E1;
+                guiTextColor = 0xFF203447;
+                guiAccentTextColor = 0xFF6EA7D9;
+                selectionBoxColor = 0x669AC3E9;
+            }
+            case PASTEL_ROSE -> {
+                guiPanelColor = 0xFFFFF7F8;
+                guiBorderColor = 0xFFE7A9B8;
+                guiTextColor = 0xFF4A2C33;
+                guiAccentTextColor = 0xFFD97B8D;
+                selectionBoxColor = 0x66E6B7C4;
+            }
+            case PASTEL_BUTTER -> {
+                guiPanelColor = 0xFFFFFDF4;
+                guiBorderColor = 0xFFE8D99A;
+                guiTextColor = 0xFF4A3E20;
+                guiAccentTextColor = 0xFFD6B95B;
+                selectionBoxColor = 0x66E8D8A6;
+            }
+            case PASTEL_AQUA -> {
+                guiPanelColor = 0xFFF1FFFD;
+                guiBorderColor = 0xFF86D8C8;
+                guiTextColor = 0xFF1E3A35;
+                guiAccentTextColor = 0xFF5ABFAE;
+                selectionBoxColor = 0x66A8E1D6;
+            }
+            case MOONWALKER -> {
+                guiPanelColor = 0xFF152331;
+                guiBorderColor = 0xFF000000;
+                guiTextColor = 0xFFFFFFFF;
+                guiAccentTextColor = 0xFF9DB3C7;
+                selectionBoxColor = 0x66000000;
+            }
+            case VIOLET -> {
+                guiPanelColor = 0xFF654EA3;
+                guiBorderColor = 0xFF3E2C6D;
+                guiTextColor = 0xFFFFFFFF;
+                guiAccentTextColor = 0xFFEAAFC8;
+                selectionBoxColor = 0x66574591;
+            }
+            case FEMBOY -> {
+                guiPanelColor = 0xFFCF62A9;
+                guiBorderColor = 0xFF000000;
+                guiTextColor = 0xFFFFFFFF;
+                guiAccentTextColor = 0xFF58CEF8;
+                selectionBoxColor = 0x66000000;
+            }
+            case ARGON -> {
+                guiPanelColor = 0xFF03001E;
+                guiBorderColor = 0xFF000000;
+                guiTextColor = 0xFFFFFFFF;
+                guiAccentTextColor = 0xFFEC38BC;
+                selectionBoxColor = 0x66000000;
+            }
+            case MOSS -> {
+                guiPanelColor = 0xFF134E5E;
+                guiBorderColor = 0xFF0B2E37;
+                guiTextColor = 0xFFFFFFFF;
+                guiAccentTextColor = 0xFF71B280;
+                selectionBoxColor = 0x66000000;
+            }
+            case HAZEL -> {
+                guiPanelColor = 0xFF77A1D3;
+                guiBorderColor = 0xFF4B6F9C;
+                guiTextColor = 0xFF0D1E2D;
+                guiAccentTextColor = 0xFFE684AE;
+                selectionBoxColor = 0x6677A1D3;
+            }
+        }
+    }
+
     public static float getGuiScale() {
         return 1.5f;
     }
@@ -1776,4 +2495,5 @@ public final class FmeManager {
         guiBlockBrightness = MathHelper.clamp(value, 0.25f, 4.0f);
         save();
     }
+
 }

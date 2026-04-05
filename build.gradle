@@ -24,6 +24,10 @@ dependencies {
     modImplementation "net.fabricmc:fabric-language-kotlin:${project.fabric_language_kotlin_version}"
     modImplementation "com.github.noamm9:NvgRenderer:1.0"
     include "com.github.noamm9:NvgRenderer:1.0"
+    implementation "org.jcodec:jcodec:0.2.5"
+    implementation "org.jcodec:jcodec-javase:0.2.5"
+    include "org.jcodec:jcodec:0.2.5"
+    include "org.jcodec:jcodec-javase:0.2.5"
 }
 
 processResources {

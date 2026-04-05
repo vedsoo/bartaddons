@@ -33,6 +33,7 @@ public final class HatTextureManager {
     private static String selectedFileName;
     private static final Map<Path, Identifier> CUSTOM_TEXTURE_IDS = new HashMap<>();
     private static final Map<Path, NativeImageBackedTexture> CUSTOM_TEXTURES = new HashMap<>();
+    private static final Map<Path, Integer> CUSTOM_TEXTURE_SIZES = new HashMap<>();
     private static final Map<String, Path> RESOLVED_PATH_CACHE = new HashMap<>();
 
     private HatTextureManager() {
@@ -140,15 +141,25 @@ public final class HatTextureManager {
                 return null;
             }
             NativeImage finalImage = normalizeTexture(image);
+            int size = finalImage.getWidth();
             NativeImageBackedTexture newTexture = new NativeImageBackedTexture(() -> "hat_custom/" + path.getFileName(), finalImage);
             newTexture.setFilter(true, true);
             MinecraftClient.getInstance().getTextureManager().registerTexture(id, newTexture);
             CUSTOM_TEXTURE_IDS.put(path, id);
             CUSTOM_TEXTURES.put(path, newTexture);
+            CUSTOM_TEXTURE_SIZES.put(path, size);
             return id;
         } catch (IOException ignored) {
             return null;
         }
+    }
+
+    public static int getCustomTextureSize(Path path) {
+        if (path == null) {
+            return -1;
+        }
+        Integer size = CUSTOM_TEXTURE_SIZES.get(path);
+        return size == null ? -1 : size;
     }
 
     public static Path resolveTexturePath(String fileName) {
@@ -342,13 +353,13 @@ public final class HatTextureManager {
         if (image == null) {
             return null;
         }
-        NativeImage out = new NativeImage(image.getWidth(), image.getHeight(), true);
-        for (int y = 0; y < image.getHeight(); y++) {
-            for (int x = 0; x < image.getWidth(); x++) {
-                out.setColorArgb(x, y, image.getRGB(x, y));
-            }
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        if (!ImageIO.write(image, "png", out)) {
+            return null;
         }
-        return out;
+        try (InputStream in = new java.io.ByteArrayInputStream(out.toByteArray())) {
+            return NativeImage.read(in);
+        }
     }
 
     private static String sanitizeTexturePath(String name) {

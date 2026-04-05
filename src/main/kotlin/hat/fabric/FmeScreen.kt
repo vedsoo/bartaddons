@@ -647,7 +647,22 @@ class FmeScreen(private val openGuiSettings: Boolean = false) : Screen(Text.lite
                         val size = max(1, minOf(cellWidth, cellHeight) - padding * 2)
                         val drawX = x + (cellWidth - size) / 2
                         val drawY = yDraw + (cellHeight - size) / 2
-                        context.drawTexture(RenderPipelines.GUI_TEXTURED, textureId, drawX, drawY, 0f, 0f, size, size, size, size)
+                        val textureSize = HatTextureManager.getCustomTextureSize(path)
+                        val texSize = if (textureSize > 0) textureSize else size
+                        context.drawTexture(
+                            RenderPipelines.GUI_TEXTURED,
+                            textureId,
+                            drawX,
+                            drawY,
+                            0f,
+                            0f,
+                            size,
+                            size,
+                            texSize,
+                            texSize,
+                            texSize,
+                            texSize
+                        )
                     } else {
                         val label = trimToWidth(name, cellWidth - 12)
                         val labelY = yDraw + max(0, (cellHeight - textRenderer.fontHeight) / 2)

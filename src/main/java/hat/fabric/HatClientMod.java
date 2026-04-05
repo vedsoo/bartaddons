@@ -57,6 +57,8 @@ public final class HatClientMod implements ClientModInitializer {
     private static BlockPos worldEditPos2;
     private static BlockPos worldEditPos3;
     private static int schematicRotationTurns = 0;
+    private static long lastAttackScanTick = Long.MIN_VALUE;
+    private static BlockPos lastAttackScanPos;
     private static final long WORLD_EDIT_MAX_BLOCKS = 200_000L;
     private static final int WORLD_EDIT_LIST_LIMIT = 50;
     private static final java.util.concurrent.ExecutorService DOWNLOAD_EXECUTOR =
@@ -69,6 +71,7 @@ public final class HatClientMod implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         FmeManager.load();
+        GifHudManager.load();
 
         openGuiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.hat.open_gui",
@@ -106,12 +109,19 @@ public final class HatClientMod implements ClientModInitializer {
         WorldRenderEvents.AFTER_ENTITIES.register(FmeCustomTextureRenderer::render);
         WorldRenderEvents.AFTER_ENTITIES.register(FmeGhostBlockRenderer::render);
         WorldRenderEvents.AFTER_ENTITIES.register(FmeWorldEditRenderer::render);
+        HudRenderCallback.EVENT.register(GifHudManager::renderHud);
         ClientCommandRegistrationCallback.EVENT.register(HatClientMod::registerFmeCommands);
         AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
             if (!world.isClient() || !FmeManager.isEnabled() || !FmeManager.isEditMode()) {
                 return ActionResult.PASS;
             }
-            if (FmeManager.clearReplacement(pos.toImmutable()) && player != null) {
+            if (FmeManager.clearReplacement(pos.toImmutable())) {
+                FmeManager.sendClientMessage("Reset block to original texture");
+                return ActionResult.PASS;
+            }
+            MinecraftClient client = MinecraftClient.getInstance();
+            BlockPos mappedPos = findMappedOrCustomPosInSightCached(client);
+            if (mappedPos != null && FmeManager.clearReplacement(mappedPos.toImmutable())) {
                 FmeManager.sendClientMessage("Reset block to original texture");
             }
             return ActionResult.PASS;
@@ -142,7 +152,9 @@ public final class HatClientMod implements ClientModInitializer {
 
     private static void handleKeys(MinecraftClient client) {
         FmeManager.clientTick(client);
-        HatTextureManager.tickAnimations(System.currentTimeMillis());
+        long now = System.currentTimeMillis();
+        HatTextureManager.tickAnimations(now);
+        GifHudManager.tick(now);
 
         while (rotateFmeKey.wasPressed()) {
             if (!FmeManager.isEnabled() || !FmeManager.isEditMode() || client.player == null) {
@@ -262,7 +274,12 @@ public final class HatClientMod implements ClientModInitializer {
                     ctx.getSource().sendFeedback(Text.literal("FME is now " + (enabled ? "ON" : "OFF")));
                     return 1;
                 }))
-                .then(ClientCommandManager.literal("edit").executes(ctx -> {
+                .then(ClientCommandManager.literal("editmode").executes(ctx -> {
+                    boolean edit = FmeManager.toggleEditMode();
+                    ctx.getSource().sendFeedback(Text.literal("FME edit mode is now " + (edit ? "ON" : "OFF")));
+                    return 1;
+                }))
+                .then(ClientCommandManager.literal("em").executes(ctx -> {
                     boolean edit = FmeManager.toggleEditMode();
                     ctx.getSource().sendFeedback(Text.literal("FME edit mode is now " + (edit ? "ON" : "OFF")));
                     return 1;
@@ -436,6 +453,13 @@ public final class HatClientMod implements ClientModInitializer {
                             ctx.getSource(),
                             ctx.getArgument("url", String.class)
                         ))))
+                .then(ClientCommandManager.literal("gif")
+                    .then(ClientCommandManager.literal("addurl")
+                        .then(ClientCommandManager.argument("url", StringArgumentType.greedyString())
+                            .executes(ctx -> executeGifAddUrl(
+                                ctx.getSource(),
+                                ctx.getArgument("url", String.class)
+                            )))))
                 .then(ClientCommandManager.literal("image")
                     .then(ClientCommandManager.literal("import")
                         .then(ClientCommandManager.argument("file", StringArgumentType.word())
@@ -908,6 +932,24 @@ public final class HatClientMod implements ClientModInitializer {
         return 1;
     }
 
+    private static int executeGifAddUrl(FabricClientCommandSource source, String urlRaw) {
+        if (urlRaw == null || urlRaw.isBlank()) {
+            source.sendError(Text.literal("Missing URL."));
+            return 0;
+        }
+        String resolved = normalizeGifUrl(urlRaw.trim());
+        if (resolved == null) {
+            source.sendError(Text.literal("Unsupported URL. Use a direct .gif/.mp4 link or a single Imgur GIF."));
+            return 0;
+        }
+        source.sendFeedback(Text.literal("Downloading GIF/MP4..."));
+        java.util.concurrent.CompletableFuture.runAsync(
+            () -> downloadGifToHud(source, resolved),
+            DOWNLOAD_EXECUTOR
+        );
+        return 1;
+    }
+
     private static int executeImageImport(
         FabricClientCommandSource source,
         String imageFile,
@@ -1232,6 +1274,135 @@ public final class HatClientMod implements ClientModInitializer {
         });
     }
 
+    private static void downloadGifToHud(FabricClientCommandSource source, String url) {
+        downloadGifToHudInternal(source, url, 0);
+    }
+
+    private static void downloadGifToHudInternal(FabricClientCommandSource source, String url, int depth) {
+        if (depth > 1) {
+            runOnClient(() -> source.sendError(Text.literal("Failed to resolve a direct GIF/MP4 link.")));
+            return;
+        }
+        java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+            .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+            .build();
+        java.net.http.HttpRequest request;
+        try {
+            request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
+                .timeout(java.time.Duration.ofSeconds(20))
+                .GET()
+                .build();
+        } catch (IllegalArgumentException ex) {
+            runOnClient(() -> source.sendError(Text.literal("Invalid URL: " + url)));
+            return;
+        }
+
+        java.net.http.HttpResponse<byte[]> response;
+        try {
+            response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+        } catch (Exception ex) {
+            runOnClient(() -> source.sendError(Text.literal("Failed to download GIF.")));
+            return;
+        }
+
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            runOnClient(() -> source.sendError(Text.literal("Download failed (HTTP " + response.statusCode() + ").")));
+            return;
+        }
+
+        String contentType = response.headers().firstValue("content-type").orElse("");
+        String ext = fileExtensionFromContentTypeGifOrMp4(contentType);
+        String nameFromUrl = fileNameFromUrl(url);
+        if (ext == null) {
+            ext = fileExtensionFromNameGifOrMp4(nameFromUrl);
+        }
+        if (ext == null || (!ext.equals(".gif") && !ext.equals(".mp4"))) {
+            runOnClient(() -> source.sendError(Text.literal("Unsupported type. Use .gif or .mp4.")));
+            return;
+        }
+
+        byte[] bytes = response.body();
+        if (bytes == null || bytes.length == 0) {
+            runOnClient(() -> source.sendError(Text.literal("Empty GIF response.")));
+            return;
+        }
+        if (bytes.length > 25 * 1024 * 1024) {
+            runOnClient(() -> source.sendError(Text.literal("GIF too large (max 25MB).")));
+            return;
+        }
+        if (ext.equals(".gif") && !isGifHeader(bytes)) {
+            String html = tryDecodeHtml(bytes, contentType);
+            if (html != null) {
+                String mediaUrl = extractMediaUrlFromHtml(html);
+                if (mediaUrl != null) {
+                    downloadGifToHudInternal(source, mediaUrl, depth + 1);
+                    return;
+                }
+            }
+            runOnClient(() -> source.sendError(Text.literal(
+                "Downloaded file is not a valid GIF. If this is a Tenor page, use the direct media link."
+            )));
+            return;
+        }
+
+        String baseName = sanitizeFileName(nameFromUrl);
+        if (baseName == null || baseName.isBlank()) {
+            baseName = "gif";
+        }
+        if (!baseName.toLowerCase(java.util.Locale.ROOT).endsWith(ext)) {
+            baseName = stripExtension(baseName) + ext;
+        }
+
+        java.nio.file.Path dir = GifHudManager.getGifDir();
+        try {
+            java.nio.file.Files.createDirectories(dir);
+        } catch (java.io.IOException ex) {
+            runOnClient(() -> source.sendError(Text.literal("Could not create GIF directory.")));
+            return;
+        }
+
+        java.nio.file.Path target = uniquePath(dir, baseName);
+        try {
+            java.nio.file.Files.write(target, bytes);
+        } catch (java.io.IOException ex) {
+            runOnClient(() -> source.sendError(Text.literal("Failed to save GIF.")));
+            return;
+        }
+
+        if (ext.equals(".mp4")) {
+            java.nio.file.Path gifPath = dir.resolve(stripExtension(target.getFileName().toString()) + ".gif");
+            boolean converted = convertMp4ToGif(target, gifPath);
+            if (!converted) {
+                runOnClient(() -> source.sendError(Text.literal("Saved MP4 but failed to convert it.")));
+                return;
+            }
+            try {
+                java.nio.file.Files.deleteIfExists(target);
+            } catch (java.io.IOException ignored) {
+            }
+            String fileName = gifPath.getFileName().toString();
+            runOnClient(() -> {
+                boolean loaded = GifHudManager.selectGif(gifPath);
+                if (!loaded) {
+                    source.sendError(Text.literal("Converted MP4 but failed to load GIF: " + fileName));
+                    return;
+                }
+                source.sendFeedback(Text.literal("Added GIF (from MP4): " + fileName));
+            });
+            return;
+        }
+
+        String fileName = target.getFileName().toString();
+        runOnClient(() -> {
+            boolean loaded = GifHudManager.selectGif(target);
+            if (!loaded) {
+                source.sendError(Text.literal("Saved GIF but failed to load it: " + fileName));
+                return;
+            }
+            source.sendFeedback(Text.literal("Added GIF: " + fileName));
+        });
+    }
+
     private static void runOnClient(Runnable task) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client != null) {
@@ -1258,6 +1429,36 @@ public final class HatClientMod implements ClientModInitializer {
                     return "https://i.imgur.com/" + id;
                 }
                 return "https://i.imgur.com/" + id + ".jpg";
+            }
+            return raw;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private static String normalizeGifUrl(String raw) {
+        try {
+            java.net.URI uri = java.net.URI.create(raw);
+            String host = uri.getHost();
+            if (host == null) {
+                return null;
+            }
+            String lowerHost = host.toLowerCase(java.util.Locale.ROOT);
+            if (lowerHost.endsWith("imgur.com") && !lowerHost.startsWith("i.")) {
+                String path = uri.getPath() == null ? "" : uri.getPath();
+                String[] parts = path.split("/");
+                String id = parts.length > 0 ? parts[parts.length - 1] : "";
+                if (id.isBlank() || "gallery".equalsIgnoreCase(id) || "a".equalsIgnoreCase(id)) {
+                    return null;
+                }
+                if (id.endsWith(".gifv")) {
+                    id = id.substring(0, id.length() - 5) + ".gif";
+                } else if (id.endsWith(".mp4")) {
+                    // keep mp4 as-is
+                } else if (!id.contains(".")) {
+                    id = id + ".gif";
+                }
+                return "https://i.imgur.com/" + id;
             }
             return raw;
         } catch (Exception ex) {
@@ -1293,16 +1494,171 @@ public final class HatClientMod implements ClientModInitializer {
         return null;
     }
 
+    private static String fileExtensionFromContentTypeGifOrMp4(String contentType) {
+        String ct = contentType.toLowerCase(java.util.Locale.ROOT);
+        if (ct.startsWith("image/gif")) {
+            return ".gif";
+        }
+        if (ct.startsWith("video/mp4")) {
+            return ".mp4";
+        }
+        return null;
+    }
+
+    private static String fileExtensionFromNameGifOrMp4(String name) {
+        int dot = name.lastIndexOf('.');
+        if (dot == -1) {
+            return null;
+        }
+        String ext = name.substring(dot).toLowerCase(java.util.Locale.ROOT);
+        if (ext.equals(".gif") || ext.equals(".mp4")) {
+            return ext;
+        }
+        return null;
+    }
+
     private static String fileExtensionFromName(String name) {
         int dot = name.lastIndexOf('.');
         if (dot == -1) {
             return null;
         }
         String ext = name.substring(dot).toLowerCase(java.util.Locale.ROOT);
-        if (ext.equals(".png") || ext.equals(".jpg") || ext.equals(".jpeg")) {
+        if (ext.equals(".png") || ext.equals(".jpg") || ext.equals(".jpeg") || ext.equals(".gif")) {
             return ext;
         }
         return null;
+    }
+
+    private static boolean isGifHeader(byte[] bytes) {
+        if (bytes == null || bytes.length < 6) {
+            return false;
+        }
+        return bytes[0] == 'G'
+            && bytes[1] == 'I'
+            && bytes[2] == 'F'
+            && bytes[3] == '8'
+            && (bytes[4] == '7' || bytes[4] == '9')
+            && bytes[5] == 'a';
+    }
+
+    private static String tryDecodeHtml(byte[] bytes, String contentType) {
+        String ct = contentType == null ? "" : contentType.toLowerCase(java.util.Locale.ROOT);
+        if (ct.contains("text/html") || ct.contains("application/xhtml")) {
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        }
+        if (bytes.length > 5 && bytes[0] == '<' && bytes[1] == '!' && bytes[2] == 'D') {
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        }
+        return null;
+    }
+
+    private static String extractMediaUrlFromHtml(String html) {
+        if (html == null || html.isBlank()) {
+            return null;
+        }
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+            "https?://media\\.tenor\\.com/[^\\\"'\\s>]+\\.(gif|mp4)",
+            java.util.regex.Pattern.CASE_INSENSITIVE
+        );
+        java.util.regex.Matcher matcher = pattern.matcher(html);
+        if (matcher.find()) {
+            return matcher.group();
+        }
+        return null;
+    }
+
+    private static boolean convertMp4ToGif(java.nio.file.Path mp4Path, java.nio.file.Path gifPath) {
+        try (org.jcodec.common.io.SeekableByteChannel channel = org.jcodec.common.io.NIOUtils.readableChannel(mp4Path.toFile())) {
+            org.jcodec.api.FrameGrab grab = org.jcodec.api.FrameGrab.createFrameGrab(channel);
+            int maxFrames = 600;
+            int delayMs = 66;
+            org.jcodec.common.DemuxerTrackMeta meta = grab.getVideoTrack().getMeta();
+            if (meta != null && meta.getTotalDuration() > 0 && meta.getTotalFrames() > 0) {
+                double perFrame = meta.getTotalDuration() / meta.getTotalFrames();
+                delayMs = (int) Math.max(20, Math.min(1000, Math.round(perFrame * 1000.0)));
+            }
+
+            javax.imageio.ImageWriter writer = javax.imageio.ImageIO.getImageWritersByFormatName("gif").next();
+            javax.imageio.stream.ImageOutputStream output = javax.imageio.ImageIO.createImageOutputStream(gifPath.toFile());
+            writer.setOutput(output);
+            javax.imageio.metadata.IIOMetadata streamMeta = buildGifStreamMetadata(writer);
+            writer.prepareWriteSequence(streamMeta);
+
+            int count = 0;
+            while (count < maxFrames) {
+                org.jcodec.common.model.Picture picture = grab.getNativeFrame();
+                if (picture == null) {
+                    break;
+                }
+                java.awt.image.BufferedImage frame = org.jcodec.scale.AWTUtil.toBufferedImage(picture);
+                javax.imageio.metadata.IIOMetadata metadata = buildGifFrameMetadata(writer, frame, delayMs);
+                javax.imageio.IIOImage image = new javax.imageio.IIOImage(frame, null, metadata);
+                writer.writeToSequence(image, null);
+                count++;
+            }
+            writer.endWriteSequence();
+            output.close();
+            writer.dispose();
+
+            return java.nio.file.Files.exists(gifPath);
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    private static javax.imageio.metadata.IIOMetadata buildGifStreamMetadata(javax.imageio.ImageWriter writer) throws javax.imageio.IIOException {
+        javax.imageio.metadata.IIOMetadata metadata = writer.getDefaultStreamMetadata(null);
+        if (metadata == null) {
+            return null;
+        }
+        String format = metadata.getNativeMetadataFormatName();
+        org.w3c.dom.Node root = metadata.getAsTree(format);
+        org.w3c.dom.NodeList nodes = root.getChildNodes();
+        org.w3c.dom.Node appExtensions = null;
+        for (int i = 0; i < nodes.getLength(); i++) {
+            org.w3c.dom.Node node = nodes.item(i);
+            if ("ApplicationExtensions".equals(node.getNodeName())) {
+                appExtensions = node;
+                break;
+            }
+        }
+        if (appExtensions == null) {
+            appExtensions = new javax.imageio.metadata.IIOMetadataNode("ApplicationExtensions");
+            root.appendChild(appExtensions);
+        }
+        javax.imageio.metadata.IIOMetadataNode app = new javax.imageio.metadata.IIOMetadataNode("ApplicationExtension");
+        app.setAttribute("applicationID", "NETSCAPE");
+        app.setAttribute("authenticationCode", "2.0");
+        app.setUserObject(new byte[] { 1, 0, 0 });
+        appExtensions.appendChild(app);
+        metadata.setFromTree(format, root);
+        return metadata;
+    }
+
+    private static javax.imageio.metadata.IIOMetadata buildGifFrameMetadata(
+        javax.imageio.ImageWriter writer,
+        java.awt.image.BufferedImage frame,
+        int delayMs
+    ) throws javax.imageio.IIOException {
+        int frameType = frame.getType() == 0 ? java.awt.image.BufferedImage.TYPE_4BYTE_ABGR : frame.getType();
+        javax.imageio.ImageTypeSpecifier type = javax.imageio.ImageTypeSpecifier.createFromBufferedImageType(frameType);
+        javax.imageio.metadata.IIOMetadata metadata = writer.getDefaultImageMetadata(type, null);
+        String format = metadata.getNativeMetadataFormatName();
+        org.w3c.dom.Node root = metadata.getAsTree(format);
+
+        org.w3c.dom.NodeList nodes = root.getChildNodes();
+        for (int i = 0; i < nodes.getLength(); i++) {
+            org.w3c.dom.Node node = nodes.item(i);
+            if ("GraphicControlExtension".equals(node.getNodeName())) {
+                org.w3c.dom.NamedNodeMap attrs = node.getAttributes();
+                int cs = Math.max(2, delayMs / 10);
+                attrs.getNamedItem("delayTime").setNodeValue(Integer.toString(cs));
+                attrs.getNamedItem("disposalMethod").setNodeValue("none");
+            }
+        }
+
+        metadata.setFromTree(format, root);
+        return metadata;
     }
 
     private static String stripExtension(String name) {
@@ -1436,6 +1792,19 @@ public final class HatClientMod implements ClientModInitializer {
             }
         }
         return null;
+    }
+
+    private static BlockPos findMappedOrCustomPosInSightCached(MinecraftClient client) {
+        if (client == null || client.world == null) {
+            return null;
+        }
+        long nowTick = client.world.getTime();
+        if (nowTick - lastAttackScanTick <= 2) {
+            return lastAttackScanPos;
+        }
+        lastAttackScanTick = nowTick;
+        lastAttackScanPos = findMappedOrCustomPosInSight(client);
+        return lastAttackScanPos;
     }
 
     private static GhostHit findGhostHit(MinecraftClient client, double reach) {

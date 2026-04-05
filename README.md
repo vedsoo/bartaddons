@@ -55,15 +55,17 @@ Replace 23. /fme replace <from> <to>
 
 Custom textures 27. /fme addurl <url>
 
-Images 28. /fme image import <file>
+GIF HUD 28. /fme gif addurl <url>
 
-29. /fme image import <file> <orientation>
+Images 29. /fme image import <file>
 
-30. /fme image import <file> <orientation> <width> <height>
+30. /fme image import <file> <orientation>
 
-Schematics 31. /fme schematic paste <file>
+31. /fme image import <file> <orientation> <width> <height>
 
-32. /fme schematic undo     
+Schematics 32. /fme schematic paste <file>
+
+33. /fme schematic undo     
 
 
 i dont care that its long it works so im not changing it 
