@@ -15,11 +15,15 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.command.CommandRegistryAccess;
 import net.minecraft.command.CommandSource;
 import net.minecraft.command.argument.IdentifierArgumentType;
 import net.minecraft.client.texture.NativeImage;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
+import net.minecraft.component.DataComponentTypes;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.minecraft.util.DyeColor;
@@ -33,6 +37,8 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.registry.Registries;
+import net.minecraft.sound.BlockSoundGroup;
+import net.minecraft.sound.SoundCategory;
 import org.lwjgl.glfw.GLFW;
 import com.mojang.brigadier.CommandDispatcher;
 
@@ -117,13 +123,16 @@ public final class HatClientMod implements ClientModInitializer {
             if (!world.isClient() || !FmeManager.isEnabled() || !FmeManager.isEditMode()) {
                 return ActionResult.PASS;
             }
-            if (FmeManager.clearReplacement(pos.toImmutable())) {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (hasMappedBreakSoundTarget(client, pos) && FmeManager.clearReplacement(pos.toImmutable())) {
+                playMappedBreakSound(client, pos);
                 FmeManager.sendClientMessage("Reset block to original texture");
                 return ActionResult.PASS;
             }
-            MinecraftClient client = MinecraftClient.getInstance();
             BlockPos mappedPos = findMappedOrCustomPosInSightCached(client);
-            if (mappedPos != null && FmeManager.clearReplacement(mappedPos.toImmutable())) {
+            if (mappedPos != null && hasMappedBreakSoundTarget(client, mappedPos)
+                && FmeManager.clearReplacement(mappedPos.toImmutable())) {
+                playMappedBreakSound(client, mappedPos);
                 FmeManager.sendClientMessage("Reset block to original texture");
             }
             return ActionResult.PASS;
@@ -176,8 +185,10 @@ public final class HatClientMod implements ClientModInitializer {
             if (!FmeManager.isEnabled() || !FmeManager.isEditMode() || client.player == null || client.world == null) {
                 continue;
             }
-            BlockPos mappedPos = findMappedPosInSight(client);
-            if (mappedPos != null && FmeManager.clearReplacement(mappedPos.toImmutable())) {
+            BlockPos mappedPos = findMappedOrCustomPosInSight(client);
+            if (mappedPos != null && hasMappedBreakSoundTarget(client, mappedPos)
+                && FmeManager.clearReplacement(mappedPos.toImmutable())) {
+                playMappedBreakSound(client, mappedPos);
                 FmeManager.sendClientMessage("Deleted mapped ghost block");
             }
         }
@@ -302,6 +313,24 @@ public final class HatClientMod implements ClientModInitializer {
                         FmeManager.openGuiSettings();
                         return 1;
                     })))
+                .then(ClientCommandManager.literal("custom")
+                    .then(ClientCommandManager.literal("item")
+                        .executes(ctx -> executeOpenCustomItemScreen(ctx.getSource()))
+                        .then(ClientCommandManager.literal("name")
+                            .executes(ctx -> executeOpenCustomItemNameScreen(ctx.getSource())))
+                        .then(ClientCommandManager.literal("rename")
+                            .executes(ctx -> executeOpenCustomItemNameScreen(ctx.getSource())))
+                        .then(ClientCommandManager.literal("clear")
+                            .executes(ctx -> executeClearCustomItem(ctx.getSource())))
+                        .then(ClientCommandManager.literal("reset")
+                            .executes(ctx -> executeClearCustomItem(ctx.getSource())))))
+                .then(ClientCommandManager.literal("newconfig")
+                    .executes(ctx -> executeConfigNew(ctx.getSource(), null))
+                    .then(ClientCommandManager.argument("name", StringArgumentType.greedyString())
+                        .executes(ctx -> executeConfigNew(
+                            ctx.getSource(),
+                            ctx.getArgument("name", String.class)
+                        ))))
                 .then(ClientCommandManager.literal("config")
                     .then(ClientCommandManager.literal("load").executes(ctx -> {
                         boolean loaded = FmeManager.loadDefaultConfig();
@@ -538,6 +567,64 @@ public final class HatClientMod implements ClientModInitializer {
         return 1;
     }
 
+    private static int executeOpenCustomItemScreen(FabricClientCommandSource source) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player == null) {
+            source.sendError(Text.literal("No player found."));
+            return 0;
+        }
+        ItemStack held = client.player.getMainHandStack();
+        if (held == null || held.isEmpty()) {
+            source.sendError(Text.literal("Hold the item you want to customize in your main hand."));
+            return 0;
+        }
+        FmeManager.openItemScreen(held);
+        source.sendFeedback(Text.literal("Editing item appearance for " + FmeManager.itemAppearanceLabel(held)));
+        return 1;
+    }
+
+    private static int executeClearCustomItem(FabricClientCommandSource source) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player == null) {
+            source.sendError(Text.literal("No player found."));
+            return 0;
+        }
+        ItemStack held = client.player.getMainHandStack();
+        if (held == null || held.isEmpty()) {
+            source.sendError(Text.literal("Hold the item you want to clear in your main hand."));
+            return 0;
+        }
+        FmeManager.openItemScreen(held);
+        boolean cleared = FmeManager.clearPendingItemAppearance();
+        if (!cleared) {
+            source.sendFeedback(Text.literal("No custom item appearance saved for " + FmeManager.itemAppearanceLabel(held)));
+            return 1;
+        }
+        source.sendFeedback(Text.literal("Cleared item appearance for " + FmeManager.itemAppearanceLabel(held)));
+        return 1;
+    }
+
+    private static int executeOpenCustomItemNameScreen(FabricClientCommandSource source) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player == null) {
+            source.sendError(Text.literal("No player found."));
+            return 0;
+        }
+        ItemStack held = client.player.getMainHandStack();
+        if (held == null || held.isEmpty()) {
+            source.sendError(Text.literal("Hold the item you want to rename in your main hand."));
+            return 0;
+        }
+        FmeManager.openItemNameScreen(held, client.player.getInventory().getSelectedSlot());
+        Text currentName = held.getCustomName();
+        if (currentName != null) {
+            source.sendFeedback(Text.literal("Editing item name for " + currentName.getString()));
+        } else {
+            source.sendFeedback(Text.literal("Editing item name for " + held.getName().getString()));
+        }
+        return 1;
+    }
+
     private static int executeWorldEditPosCurrent(FabricClientCommandSource source, int posIndex) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) {
@@ -667,12 +754,6 @@ public final class HatClientMod implements ClientModInitializer {
         }
         Selection selection = getWorldEditSelection(source);
         if (selection == null) {
-            return 0;
-        }
-        if (selection.volume > WORLD_EDIT_MAX_BLOCKS) {
-            source.sendError(Text.literal(
-                "Selection too large (" + selection.volume + " blocks). Max is " + WORLD_EDIT_MAX_BLOCKS + "."
-            ));
             return 0;
         }
 
@@ -1744,6 +1825,52 @@ public final class HatClientMod implements ClientModInitializer {
         return FmeManager.getSelectedSource().getName().getString() + " texture";
     }
 
+    private static void playMappedBreakSound(MinecraftClient client, BlockPos pos) {
+        BlockState soundState = mappedBreakSoundState(client, pos);
+        if (client == null || client.world == null || soundState == null || soundState.isAir()) {
+            return;
+        }
+
+        BlockSoundGroup soundGroup = soundState.getSoundGroup();
+        client.world.playSoundAtBlockCenterClient(
+            pos,
+            soundGroup.getBreakSound(),
+            SoundCategory.BLOCKS,
+            (soundGroup.getVolume() + 1.0f) / 2.0f,
+            soundGroup.getPitch() * 0.8f,
+            false
+        );
+    }
+
+    private static boolean hasMappedBreakSoundTarget(MinecraftClient client, BlockPos pos) {
+        BlockState soundState = mappedBreakSoundState(client, pos);
+        return soundState != null && !soundState.isAir();
+    }
+
+    private static BlockState mappedBreakSoundState(MinecraftClient client, BlockPos pos) {
+        if (client == null || client.world == null || pos == null) {
+            return null;
+        }
+
+        Block customTextureSoundSource = FmeManager.customTextureSoundSourceAt(pos);
+        if (customTextureSoundSource != null) {
+            return customTextureSoundSource.getDefaultState();
+        }
+
+        BlockState originalState = client.world.getBlockState(pos);
+        BlockState soundState = FmeManager.remapStateAt(originalState, pos);
+        if (soundState == null || soundState.isAir()) {
+            soundState = FmeManager.solidClientStateAt(pos);
+        }
+        if (soundState == null || soundState.isAir()) {
+            soundState = originalState;
+        }
+        if (soundState == null || soundState.isAir()) {
+            return null;
+        }
+        return soundState;
+    }
+
     private static BlockPos findFmeMiddleClickSupport(MinecraftClient client) {
         if (client.player == null || client.world == null) {
             return null;
@@ -1770,52 +1897,11 @@ public final class HatClientMod implements ClientModInitializer {
     }
 
     private static BlockPos findMappedPosInSight(MinecraftClient client) {
-        if (client.player == null || client.world == null) {
-            return null;
-        }
-        if (client.crosshairTarget instanceof BlockHitResult hitResult
-            && client.crosshairTarget.getType() == HitResult.Type.BLOCK
-            && FmeManager.positionReplacementsView().containsKey(hitResult.getBlockPos().asLong())) {
-            return hitResult.getBlockPos();
-        }
-
-        double reach = 6.0;
-        Vec3d start = client.player.getCameraPosVec(1.0f);
-        Vec3d look = client.player.getRotationVec(1.0f);
-        for (double dist = 0.0; dist <= reach; dist += 0.2) {
-            BlockPos pos = BlockPos.ofFloored(start.add(look.multiply(dist)));
-            if (FmeManager.positionReplacementsView().containsKey(pos.asLong())) {
-                return pos;
-            }
-        }
-        return null;
+        return findFmeTargetPosInSight(client, false);
     }
 
     private static BlockPos findMappedOrCustomPosInSight(MinecraftClient client) {
-        if (client.player == null || client.world == null) {
-            return null;
-        }
-        if (client.crosshairTarget instanceof BlockHitResult hitResult
-            && client.crosshairTarget.getType() == HitResult.Type.BLOCK) {
-            long key = hitResult.getBlockPos().asLong();
-            if (FmeManager.positionReplacementsView().containsKey(key)
-                || FmeManager.customTextureReplacementsView().containsKey(key)) {
-                return hitResult.getBlockPos();
-            }
-        }
-
-        double reach = 6.0;
-        Vec3d start = client.player.getCameraPosVec(1.0f);
-        Vec3d look = client.player.getRotationVec(1.0f);
-        for (double dist = 0.0; dist <= reach; dist += 0.2) {
-            BlockPos pos = BlockPos.ofFloored(start.add(look.multiply(dist)));
-            long key = pos.asLong();
-            if (FmeManager.positionReplacementsView().containsKey(key)
-                || FmeManager.customTextureReplacementsView().containsKey(key)) {
-                return pos;
-            }
-        }
-        return null;
+        return findFmeTargetPosInSight(client, true);
     }
 
     private static BlockPos findMappedOrCustomPosInSightCached(MinecraftClient client) {
@@ -1849,6 +1935,33 @@ public final class HatClientMod implements ClientModInitializer {
                 continue;
             }
             return new GhostHit(pos, side);
+        }
+        return null;
+    }
+
+    private static BlockPos findFmeTargetPosInSight(MinecraftClient client, boolean includeCustomTextures) {
+        if (client == null || client.player == null || client.world == null) {
+            return null;
+        }
+
+        Vec3d start = client.player.getCameraPosVec(1.0f);
+        Vec3d look = client.player.getRotationVec(1.0f);
+        double reach = 6.0;
+        double step = 0.05;
+        HashSet<Long> visited = new HashSet<>();
+
+        for (double dist = 0.0; dist <= reach; dist += step) {
+            BlockPos pos = BlockPos.ofFloored(start.add(look.multiply(dist)));
+            long key = pos.asLong();
+            if (!visited.add(key)) {
+                continue;
+            }
+            if (FmeManager.positionReplacementsView().containsKey(key)) {
+                return pos;
+            }
+            if (includeCustomTextures && FmeManager.customTextureReplacementsView().containsKey(key)) {
+                return pos;
+            }
         }
         return null;
     }

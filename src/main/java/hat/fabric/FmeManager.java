@@ -7,9 +7,14 @@ import com.google.gson.JsonParser;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.component.ComponentChanges;
+import net.minecraft.component.DataComponentTypes;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.state.property.Properties;
 import net.minecraft.text.MutableText;
+import net.minecraft.text.Style;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
@@ -25,6 +30,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -43,8 +49,11 @@ public final class FmeManager {
     private static final Map<Long, Block> POSITION_REPLACEMENTS = new HashMap<>();
     private static final Map<Long, String> POSITION_CUSTOM_TEXTURES = new HashMap<>();
     private static final Map<Long, Block> POSITION_CUSTOM_TEXTURE_SOURCES = new HashMap<>();
+    private static final Map<Long, Block> POSITION_CUSTOM_TEXTURE_SOUND_SOURCES = new HashMap<>();
     private static final Map<Long, Integer> POSITION_ROTATIONS = new HashMap<>();
     private static final Map<Long, BlockState> POSITION_STATE_OVERRIDES = new HashMap<>();
+    private static final Map<String, ItemAppearanceMapping> ITEM_APPEARANCE_MAPPINGS = new HashMap<>();
+    private static final Map<String, ItemNameOverrideMapping> ITEM_NAME_OVERRIDES = new HashMap<>();
     private static final Map<Long, Block> LAST_REPLACE_UNDO = new HashMap<>();
     private static boolean lastReplaceWasCustom = false;
     private static final Map<RemapKey, BlockState> REMAP_STATE_CACHE = new HashMap<>();
@@ -53,6 +62,8 @@ public final class FmeManager {
     private static final Set<String> CUSTOM_TEXTURE_FAVORITES = new HashSet<>();
     private static boolean batching = false;
     private static boolean batchChanged = false;
+    private static boolean pendingSave = false;
+    private static int saveInTicks = -1;
     private static boolean enabled = false;
     private static boolean editMode = false;
     private static Block selectedSource = net.minecraft.block.Blocks.STONE;
@@ -61,6 +72,10 @@ public final class FmeManager {
     private static int selectedRotation = 0;
     private static int openScreenInTicks = -1;
     private static ScreenMode openScreenMode = ScreenMode.DEFAULT;
+    private static String pendingItemEditKey;
+    private static ItemStack pendingItemEditStack = ItemStack.EMPTY;
+    private static ItemStack pendingItemNameStack = ItemStack.EMPTY;
+    private static int pendingItemNameSlot = -1;
     private static int guiPanelColor = 0xFFF5F5F5;
     private static int guiBorderColor = 0xFF000000;
     private static int guiTextColor = 0xFF000000;
@@ -73,6 +88,21 @@ public final class FmeManager {
     private static boolean customThemeActive = false;
     private static String customThemeName;
     private static CustomTheme customTheme;
+    private static LayoutPreset layoutPreset = LayoutPreset.BLOOM;
+    private static float itemFirstPersonX = 0.0f;
+    private static float itemFirstPersonY = 0.0f;
+    private static float itemFirstPersonZ = 0.0f;
+    private static float itemFirstPersonRotX = 0.0f;
+    private static float itemFirstPersonRotY = 0.0f;
+    private static float itemFirstPersonRotZ = 0.0f;
+    private static float itemFirstPersonScale = 1.0f;
+    private static float itemThirdPersonX = 0.0f;
+    private static float itemThirdPersonY = 0.0f;
+    private static float itemThirdPersonZ = 0.0f;
+    private static float itemThirdPersonRotX = 0.0f;
+    private static float itemThirdPersonRotY = 0.0f;
+    private static float itemThirdPersonRotZ = 0.0f;
+    private static float itemThirdPersonScale = 1.0f;
     private static float guiScale = 1.5f;
     private static float guiBlockBrightness = 2.0f;
     private static boolean autoSaveEnabled = true;
@@ -80,6 +110,8 @@ public final class FmeManager {
     private static int offsetX = 0;
     private static int offsetY = 0;
     private static int offsetZ = 0;
+    private static long renderDataVersion = 0L;
+    private static final int SAVE_DEBOUNCE_TICKS = 4;
 
     private FmeManager() {
     }
@@ -94,6 +126,7 @@ public final class FmeManager {
 
     public static boolean toggleEnabled() {
         enabled = !enabled;
+        recordEnabledState(enabled);
         save();
         refreshWorld(null);
         return enabled;
@@ -101,6 +134,7 @@ public final class FmeManager {
 
     public static boolean toggleEditMode() {
         editMode = !editMode;
+        recordEditModeState(editMode);
         save();
         refreshWorld(null);
         return editMode;
@@ -201,6 +235,7 @@ public final class FmeManager {
         if (selectedSourceType == SelectedSourceType.CUSTOM_TEXTURE && selectedCustomTexture != null) {
             POSITION_CUSTOM_TEXTURES.put(key, selectedCustomTexture);
             POSITION_CUSTOM_TEXTURE_SOURCES.put(key, target);
+            POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.put(key, selectedSource);
             POSITION_REPLACEMENTS.remove(key);
             POSITION_ROTATIONS.put(key, selectedRotation);
             POSITION_STATE_OVERRIDES.remove(key);
@@ -218,6 +253,7 @@ public final class FmeManager {
             AIR_GHOST_POSITIONS.remove(key);
             POSITION_CUSTOM_TEXTURES.remove(key);
             POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
+            POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.remove(key);
             POSITION_STATE_OVERRIDES.remove(key);
             markChanged(pos);
             return true;
@@ -225,6 +261,7 @@ public final class FmeManager {
         POSITION_REPLACEMENTS.put(key, selectedSource);
         POSITION_CUSTOM_TEXTURES.remove(key);
         POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
+        POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.remove(key);
         POSITION_ROTATIONS.put(key, selectedRotation);
         POSITION_STATE_OVERRIDES.remove(key);
         if (target.getDefaultState().isAir()) {
@@ -247,6 +284,7 @@ public final class FmeManager {
             AIR_GHOST_POSITIONS.remove(key);
             POSITION_CUSTOM_TEXTURES.remove(key);
             POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
+            POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.remove(key);
             POSITION_STATE_OVERRIDES.remove(key);
             markChanged(pos);
             return true;
@@ -254,6 +292,7 @@ public final class FmeManager {
         POSITION_REPLACEMENTS.put(key, mapped);
         POSITION_CUSTOM_TEXTURES.remove(key);
         POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
+        POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.remove(key);
         POSITION_ROTATIONS.put(key, Math.floorMod(rotation, 4));
         POSITION_STATE_OVERRIDES.remove(key);
         if (target.getDefaultState().isAir()) {
@@ -273,6 +312,7 @@ public final class FmeManager {
         boolean removed = POSITION_REPLACEMENTS.remove(key) != null;
         boolean removedCustom = POSITION_CUSTOM_TEXTURES.remove(key) != null;
         POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
+        POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.remove(key);
         AIR_GHOST_POSITIONS.remove(key);
         POSITION_STATE_OVERRIDES.remove(key);
         if (removed || removedCustom) {
@@ -287,6 +327,7 @@ public final class FmeManager {
         boolean removed = POSITION_REPLACEMENTS.remove(key) != null;
         boolean removedCustom = POSITION_CUSTOM_TEXTURES.remove(key) != null;
         POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
+        POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.remove(key);
         AIR_GHOST_POSITIONS.remove(key);
         POSITION_STATE_OVERRIDES.remove(key);
         if (removed || removedCustom) {
@@ -354,6 +395,7 @@ public final class FmeManager {
                 LAST_REPLACE_UNDO.put(key, from);
                 POSITION_CUSTOM_TEXTURES.put(key, textureFile);
                 POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
+                POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.put(key, from);
                 toRemove.add(key);
                 changed++;
             }
@@ -388,6 +430,7 @@ public final class FmeManager {
             if (lastReplaceWasCustom && POSITION_CUSTOM_TEXTURES.containsKey(key)) {
                 POSITION_CUSTOM_TEXTURES.remove(key);
                 POSITION_CUSTOM_TEXTURE_SOURCES.remove(key);
+                POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.remove(key);
                 POSITION_REPLACEMENTS.put(key, entry.getValue());
                 restored++;
             }
@@ -638,6 +681,387 @@ public final class FmeManager {
         save();
     }
 
+    public static String itemAppearanceKey(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return null;
+        }
+        String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+        String baseName = baseItemDisplayName(stack).getString();
+        return itemId + "|" + baseName;
+    }
+
+    public static String itemNameOverrideKey(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return null;
+        }
+        String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+        String baseName = baseItemDisplayName(stack).getString();
+        ComponentChanges componentChanges = sanitizedNameComponentChanges(stack);
+        if (componentChanges.isEmpty()) {
+            return itemId + "|" + baseName;
+        }
+        return itemId + "|" + baseName + "|" + componentChanges;
+    }
+
+    public static Text baseItemDisplayName(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return Text.literal("Empty");
+        }
+        Text customName = stack.get(DataComponentTypes.CUSTOM_NAME);
+        if (customName != null) {
+            return customName;
+        }
+        Text itemName = stack.get(DataComponentTypes.ITEM_NAME);
+        if (itemName != null) {
+            return itemName;
+        }
+        return stack.getItem().getName(stack);
+    }
+
+    public static String itemAppearanceLabel(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return "Empty";
+        }
+        Identifier itemId = Registries.ITEM.getId(stack.getItem());
+        return itemDisplayName(stack).getString() + " (" + itemId + ")";
+    }
+
+    public static void openItemScreen(ItemStack stack) {
+        pendingItemEditStack = stack == null ? ItemStack.EMPTY : stack.copy();
+        pendingItemEditKey = itemAppearanceKey(stack);
+        openScreenMode = ScreenMode.ITEM;
+        openScreenInTicks = 2;
+    }
+
+    public static void openItemNameScreen(ItemStack stack, int slot) {
+        pendingItemNameStack = stack == null ? ItemStack.EMPTY : stack.copy();
+        pendingItemNameSlot = slot;
+        openScreenMode = ScreenMode.ITEM_NAME;
+        openScreenInTicks = 2;
+    }
+
+    public static boolean hasPendingItemEdit() {
+        return pendingItemEditKey != null && !pendingItemEditKey.isBlank() && !pendingItemEditStack.isEmpty();
+    }
+
+    public static ItemStack getPendingItemEditStack() {
+        return pendingItemEditStack.copy();
+    }
+
+    public static String getPendingItemEditLabel() {
+        if (!hasPendingItemEdit()) {
+            return "No held item selected";
+        }
+        return itemAppearanceLabel(pendingItemEditStack);
+    }
+
+    public static Map<String, ItemAppearanceMapping> itemAppearanceMappingsView() {
+        return Collections.unmodifiableMap(ITEM_APPEARANCE_MAPPINGS);
+    }
+
+    public static ItemNameOverrideMapping itemNameOverrideAt(ItemStack stack) {
+        String key = itemNameOverrideKey(stack);
+        if (key == null || stack == null || stack.isEmpty()) {
+            return null;
+        }
+        ItemNameOverrideMapping exact = ITEM_NAME_OVERRIDES.get(key);
+        if (exact != null) {
+            return exact;
+        }
+
+        String sourceItemId = Registries.ITEM.getId(stack.getItem()).toString();
+        String baseName = baseItemDisplayName(stack).getString();
+        for (ItemNameOverrideMapping mapping : ITEM_NAME_OVERRIDES.values()) {
+            if (mapping != null && sourceItemId.equals(mapping.sourceItemId) && baseName.equals(mapping.baseName)) {
+                return mapping;
+            }
+        }
+        return null;
+    }
+
+    public static Text itemDisplayName(ItemStack stack) {
+        ItemNameOverrideMapping override = itemNameOverrideAt(stack);
+        if (override != null) {
+            return override.toText();
+        }
+        return baseItemDisplayName(stack);
+    }
+
+    public static Text itemNameOverrideText(ItemStack stack) {
+        ItemNameOverrideMapping override = itemNameOverrideAt(stack);
+        return override == null ? null : override.toText();
+    }
+
+    public static boolean setItemNameOverride(ItemStack stack, String name, int color) {
+        if (stack == null || stack.isEmpty() || name == null) {
+            return false;
+        }
+        String trimmed = name.trim();
+        if (trimmed.isEmpty()) {
+            return clearItemNameOverride(stack);
+        }
+        String key = itemNameOverrideKey(stack);
+        if (key == null) {
+            return false;
+        }
+        String sourceItemId = Registries.ITEM.getId(stack.getItem()).toString();
+        String baseName = baseItemDisplayName(stack).getString();
+        removeItemNameOverridesFor(sourceItemId, baseName);
+        ITEM_NAME_OVERRIDES.put(key, new ItemNameOverrideMapping(sourceItemId, baseName, trimmed, color & 0xFFFFFF));
+        markChanged(null);
+        return true;
+    }
+
+    public static boolean clearItemNameOverride(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return false;
+        }
+        String sourceItemId = Registries.ITEM.getId(stack.getItem()).toString();
+        String baseName = baseItemDisplayName(stack).getString();
+        boolean removed = removeItemNameOverridesFor(sourceItemId, baseName) > 0;
+        if (removed) {
+            markChanged(null);
+        }
+        return removed;
+    }
+
+    public static ItemAppearanceMapping itemAppearanceAt(ItemStack stack) {
+        String key = itemAppearanceKey(stack);
+        if (key == null || stack == null || stack.isEmpty()) {
+            return null;
+        }
+        ItemAppearanceMapping exact = ITEM_APPEARANCE_MAPPINGS.get(key);
+        if (exact != null) {
+            return exact;
+        }
+
+        String sourceItemId = Registries.ITEM.getId(stack.getItem()).toString();
+        String baseName = baseItemDisplayName(stack).getString();
+        for (ItemAppearanceMapping mapping : ITEM_APPEARANCE_MAPPINGS.values()) {
+            if (mapping == null || !sourceItemId.equals(mapping.sourceItemId)) {
+                continue;
+            }
+            if (mapping.baseName == null || mapping.baseName.isBlank() || baseName.equals(mapping.baseName)) {
+                return mapping;
+            }
+        }
+        return null;
+    }
+
+    public static boolean clearPendingItemAppearance() {
+        if (!hasPendingItemEdit()) {
+            return false;
+        }
+        boolean removed = removeItemAppearanceMappingsFor(pendingItemSourceItemId()) > 0;
+        if (removed) {
+            markChanged(null);
+        }
+        return removed;
+    }
+
+    public static boolean applyPendingItemAppearanceBlock(Block block) {
+        if (block == null || !hasPendingItemEdit()) {
+            return false;
+        }
+        String pendingKey = pendingItemAppearanceKey();
+        if (pendingKey == null) {
+            return false;
+        }
+        removeItemAppearanceMappingsFor(pendingItemSourceItemId());
+        ITEM_APPEARANCE_MAPPINGS.put(
+            pendingKey,
+            new ItemAppearanceMapping(
+                Registries.ITEM.getId(pendingItemEditStack.getItem()).toString(),
+                baseItemDisplayName(pendingItemEditStack).getString(),
+                ItemAppearanceTargetType.BLOCK,
+                Registries.BLOCK.getId(block).toString()
+            )
+        );
+        markChanged(null);
+        return true;
+    }
+
+    public static boolean applyPendingItemAppearanceItem(Item item) {
+        if (item == null || !hasPendingItemEdit()) {
+            return false;
+        }
+        String pendingKey = pendingItemAppearanceKey();
+        if (pendingKey == null) {
+            return false;
+        }
+        removeItemAppearanceMappingsFor(pendingItemSourceItemId());
+        ITEM_APPEARANCE_MAPPINGS.put(
+            pendingKey,
+            new ItemAppearanceMapping(
+                Registries.ITEM.getId(pendingItemEditStack.getItem()).toString(),
+                baseItemDisplayName(pendingItemEditStack).getString(),
+                ItemAppearanceTargetType.ITEM,
+                Registries.ITEM.getId(item).toString()
+            )
+        );
+        markChanged(null);
+        return true;
+    }
+
+    public static boolean applyPendingItemAppearanceCustomTexture(String fileName) {
+        if (fileName == null || fileName.isBlank() || !hasPendingItemEdit()) {
+            return false;
+        }
+        String pendingKey = pendingItemAppearanceKey();
+        if (pendingKey == null) {
+            return false;
+        }
+        removeItemAppearanceMappingsFor(pendingItemSourceItemId());
+        ITEM_APPEARANCE_MAPPINGS.put(
+            pendingKey,
+            new ItemAppearanceMapping(
+                Registries.ITEM.getId(pendingItemEditStack.getItem()).toString(),
+                baseItemDisplayName(pendingItemEditStack).getString(),
+                ItemAppearanceTargetType.CUSTOM_TEXTURE,
+                fileName.trim()
+            )
+        );
+        markChanged(null);
+        return true;
+    }
+
+    public static boolean rebindItemAppearance(ItemStack oldStack, ItemStack newStack) {
+        if (oldStack == null || oldStack.isEmpty() || newStack == null || newStack.isEmpty()) {
+            return false;
+        }
+        String oldKey = itemAppearanceKey(oldStack);
+        String newKey = itemAppearanceKey(newStack);
+        if (oldKey == null || newKey == null) {
+            return false;
+        }
+        if (oldKey.equals(newKey)) {
+            if (pendingItemEditKey != null && pendingItemEditKey.equals(oldKey)) {
+                pendingItemEditKey = newKey;
+                pendingItemEditStack = newStack.copy();
+            }
+            return false;
+        }
+        ItemAppearanceMapping mapping = ITEM_APPEARANCE_MAPPINGS.remove(oldKey);
+        if (mapping == null) {
+            if (pendingItemEditKey != null && pendingItemEditKey.equals(oldKey)) {
+                pendingItemEditKey = newKey;
+                pendingItemEditStack = newStack.copy();
+            }
+            return false;
+        }
+        ITEM_APPEARANCE_MAPPINGS.put(
+            newKey,
+            new ItemAppearanceMapping(
+                Registries.ITEM.getId(newStack.getItem()).toString(),
+                baseItemDisplayName(newStack).getString(),
+                mapping.targetType,
+                mapping.targetValue
+            )
+        );
+        if (pendingItemEditKey != null && pendingItemEditKey.equals(oldKey)) {
+            pendingItemEditKey = newKey;
+            pendingItemEditStack = newStack.copy();
+        }
+        markChanged(null);
+        return true;
+    }
+
+    private static String pendingItemSourceItemId() {
+        if (!hasPendingItemEdit()) {
+            return null;
+        }
+        return Registries.ITEM.getId(pendingItemEditStack.getItem()).toString();
+    }
+
+    private static String pendingItemAppearanceKey() {
+        if (!hasPendingItemEdit()) {
+            return null;
+        }
+        String currentKey = itemAppearanceKey(pendingItemEditStack);
+        if (currentKey != null && !currentKey.isBlank()) {
+            pendingItemEditKey = currentKey;
+            return currentKey;
+        }
+        return pendingItemEditKey;
+    }
+
+    private static int removeItemAppearanceMappingsFor(String sourceItemId) {
+        if (sourceItemId == null || sourceItemId.isBlank() || ITEM_APPEARANCE_MAPPINGS.isEmpty()) {
+            return 0;
+        }
+        int removed = 0;
+        Iterator<Map.Entry<String, ItemAppearanceMapping>> it = ITEM_APPEARANCE_MAPPINGS.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, ItemAppearanceMapping> entry = it.next();
+            ItemAppearanceMapping mapping = entry.getValue();
+            if (mapping != null && sourceItemId.equals(mapping.sourceItemId)) {
+                it.remove();
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    private static int removeItemNameOverridesFor(String sourceItemId, String baseName) {
+        if (sourceItemId == null || sourceItemId.isBlank() || baseName == null || ITEM_NAME_OVERRIDES.isEmpty()) {
+            return 0;
+        }
+        int removed = 0;
+        Iterator<Map.Entry<String, ItemNameOverrideMapping>> it = ITEM_NAME_OVERRIDES.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, ItemNameOverrideMapping> entry = it.next();
+            ItemNameOverrideMapping mapping = entry.getValue();
+            if (mapping != null && sourceItemId.equals(mapping.sourceItemId) && baseName.equals(mapping.baseName)) {
+                it.remove();
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    private static ComponentChanges sanitizedNameComponentChanges(ItemStack stack) {
+        return stack.getComponentChanges().withRemovedIf(type ->
+            type == DataComponentTypes.CUSTOM_NAME
+                || type == DataComponentTypes.ITEM_NAME
+                || type == DataComponentTypes.LORE
+                || type == DataComponentTypes.TOOLTIP_DISPLAY
+        );
+    }
+
+    public static ItemStack createItemAppearanceRenderStack(ItemStack original) {
+        ItemAppearanceMapping mapping = itemAppearanceAt(original);
+        if (mapping == null) {
+            return ItemStack.EMPTY;
+        }
+        if (mapping.targetType == ItemAppearanceTargetType.ITEM) {
+            Identifier id = Identifier.tryParse(mapping.targetValue);
+            if (id == null) {
+                return ItemStack.EMPTY;
+            }
+            Item item = Registries.ITEM.get(id);
+            if (item == null) {
+                return ItemStack.EMPTY;
+            }
+            return new ItemStack(item, Math.max(1, original.getCount()));
+        }
+        if (mapping.targetType == ItemAppearanceTargetType.BLOCK) {
+            Identifier id = Identifier.tryParse(mapping.targetValue);
+            if (id == null) {
+                return ItemStack.EMPTY;
+            }
+            Block block = Registries.BLOCK.get(id);
+            if (block == null) {
+                return ItemStack.EMPTY;
+            }
+            Item item = block.asItem();
+            if (item == null || item == net.minecraft.item.Items.AIR) {
+                return ItemStack.EMPTY;
+            }
+            return new ItemStack(item, Math.max(1, original.getCount()));
+        }
+        return ItemStack.EMPTY;
+    }
+
     public static CustomTheme snapshotCurrentTheme(String name) {
         CustomTheme theme = new CustomTheme();
         theme.name = name;
@@ -660,6 +1084,12 @@ public final class FmeManager {
         return CONFIG_DIR;
     }
 
+    public static String getCurrentConfigName() {
+        Path normalized = currentSavePath == null ? SAVE_PATH : currentSavePath;
+        Path fileName = normalized.getFileName();
+        return fileName == null ? normalized.toString() : fileName.toString();
+    }
+
     public static Map<Block, Block> replacementsView() {
         return Collections.emptyMap();
     }
@@ -676,6 +1106,10 @@ public final class FmeManager {
         return Collections.unmodifiableMap(POSITION_CUSTOM_TEXTURE_SOURCES);
     }
 
+    public static Map<Long, Block> customTextureSoundSourcesView() {
+        return Collections.unmodifiableMap(POSITION_CUSTOM_TEXTURE_SOUND_SOURCES);
+    }
+
     public static Set<Long> airGhostPositionsView() {
         return Collections.unmodifiableSet(AIR_GHOST_POSITIONS);
     }
@@ -687,8 +1121,48 @@ public final class FmeManager {
         return POSITION_CUSTOM_TEXTURE_SOURCES.get(toConfigKey(pos));
     }
 
+    public static Block customTextureSoundSourceAt(BlockPos pos) {
+        if (pos == null) {
+            return null;
+        }
+        return POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.get(toConfigKey(pos));
+    }
+
     public static boolean isAirGhostPosition(BlockPos pos) {
         return pos != null && AIR_GHOST_POSITIONS.contains(toConfigKey(pos));
+    }
+
+    public static BlockState solidClientStateAt(BlockPos pos) {
+        if (pos == null || !enabled) {
+            return null;
+        }
+
+        long key = toConfigKey(pos);
+        if (!AIR_GHOST_POSITIONS.contains(key)) {
+            return null;
+        }
+
+        BlockState override = POSITION_STATE_OVERRIDES.get(key);
+        if (override != null && !override.isAir()) {
+            return override;
+        }
+
+        Block mapped = POSITION_REPLACEMENTS.get(key);
+        if (mapped != null) {
+            BlockState mappedState = remapStateAt(net.minecraft.block.Blocks.AIR.getDefaultState(), pos);
+            return mappedState.isAir() ? mapped.getDefaultState() : mappedState;
+        }
+
+        Block source = POSITION_CUSTOM_TEXTURE_SOURCES.get(key);
+        if (source != null && !source.getDefaultState().isAir()) {
+            return source.getDefaultState();
+        }
+
+        return null;
+    }
+
+    public static long renderDataVersion() {
+        return renderDataVersion;
     }
 
     public static int rotationAt(BlockPos pos) {
@@ -716,6 +1190,13 @@ public final class FmeManager {
     }
 
     public static void clientTick(MinecraftClient client) {
+        if (saveInTicks >= 0) {
+            if (saveInTicks == 0) {
+                flushPendingSave();
+            } else {
+                saveInTicks--;
+            }
+        }
         if (openScreenInTicks < 0) {
             return;
         }
@@ -724,7 +1205,10 @@ public final class FmeManager {
             return;
         }
         openScreenInTicks = -1;
-        client.setScreen(new FmeScreen(openScreenMode == ScreenMode.GUI_SETTINGS));
+        switch (openScreenMode) {
+            case ITEM_NAME -> client.setScreen(new ItemNameEditorScreen(client.currentScreen, pendingItemNameStack.copy(), pendingItemNameSlot));
+            default -> client.setScreen(new FmeScreen(openScreenMode == ScreenMode.GUI_SETTINGS, openScreenMode == ScreenMode.ITEM));
+        }
     }
 
     public static void sendClientMessage(String message) {
@@ -738,6 +1222,7 @@ public final class FmeManager {
 
     public static void load() {
         ensureConfigDir();
+        loadSettingsState();
         String stateCustomTheme = readCustomThemeFromState();
         if (stateCustomTheme != null && applyCustomTheme(stateCustomTheme)) {
             // Custom theme applied from state.
@@ -840,12 +1325,6 @@ public final class FmeManager {
     private static boolean applyConfig(JsonObject root) {
         boolean loadedLegacy = false;
         boolean loadedFloors = false;
-        if (root.has("enabled")) {
-            enabled = root.get("enabled").getAsBoolean();
-        }
-        if (root.has("editMode")) {
-            editMode = root.get("editMode").getAsBoolean();
-        }
         if (root.has("selectedSource")) {
             Identifier id = Identifier.tryParse(root.get("selectedSource").getAsString());
             if (id != null) {
@@ -896,6 +1375,21 @@ public final class FmeManager {
         } else {
             guiBlockBrightness = 2.0f;
         }
+        itemFirstPersonX = readFloat(root, "itemFirstPersonX", 0.0f);
+        itemFirstPersonY = readFloat(root, "itemFirstPersonY", 0.0f);
+        itemFirstPersonZ = readFloat(root, "itemFirstPersonZ", 0.0f);
+        itemFirstPersonRotX = readFloat(root, "itemFirstPersonRotX", 0.0f);
+        itemFirstPersonRotY = readFloat(root, "itemFirstPersonRotY", 0.0f);
+        itemFirstPersonRotZ = readFloat(root, "itemFirstPersonRotZ", 0.0f);
+        itemFirstPersonScale = readFloat(root, "itemFirstPersonScale", 1.0f);
+        itemThirdPersonX = readFloat(root, "itemThirdPersonX", 0.0f);
+        itemThirdPersonY = readFloat(root, "itemThirdPersonY", 0.0f);
+        itemThirdPersonZ = readFloat(root, "itemThirdPersonZ", 0.0f);
+        itemThirdPersonRotX = readFloat(root, "itemThirdPersonRotX", 0.0f);
+        itemThirdPersonRotY = readFloat(root, "itemThirdPersonRotY", 0.0f);
+        itemThirdPersonRotZ = readFloat(root, "itemThirdPersonRotZ", 0.0f);
+        itemThirdPersonScale = readFloat(root, "itemThirdPersonScale", 1.0f);
+        migrateLegacyItemTransformDefaultsIfNeeded();
         if (root.has("offsetX")) {
             offsetX = root.get("offsetX").getAsInt();
         }
@@ -921,6 +1415,53 @@ public final class FmeManager {
                 if (name != null && !name.isBlank()) {
                     CUSTOM_TEXTURE_FAVORITES.add(name);
                 }
+            }
+        }
+        if (root.has("itemAppearances") && root.get("itemAppearances").isJsonArray()) {
+            JsonArray arr = root.getAsJsonArray("itemAppearances");
+            for (JsonElement e : arr) {
+                if (!e.isJsonObject()) {
+                    continue;
+                }
+                JsonObject obj = e.getAsJsonObject();
+                String key = readString(obj, "key", null);
+                String sourceItemId = readString(obj, "sourceItem", null);
+                String baseName = readString(obj, "baseName", null);
+                String typeRaw = readString(obj, "targetType", null);
+                String targetValue = readString(obj, "target", null);
+                if (key == null || typeRaw == null || targetValue == null) {
+                    continue;
+                }
+                try {
+                    ItemAppearanceTargetType type = ItemAppearanceTargetType.valueOf(typeRaw.trim().toUpperCase(Locale.ROOT));
+                    ITEM_APPEARANCE_MAPPINGS.put(key, new ItemAppearanceMapping(sourceItemId, baseName, type, targetValue));
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        if (root.has("itemNameOverrides") && root.get("itemNameOverrides").isJsonArray()) {
+            JsonArray arr = root.getAsJsonArray("itemNameOverrides");
+            for (JsonElement e : arr) {
+                if (!e.isJsonObject()) {
+                    continue;
+                }
+                JsonObject obj = e.getAsJsonObject();
+                String key = readString(obj, "key", null);
+                String sourceItemId = readString(obj, "sourceItem", null);
+                String baseName = readString(obj, "baseName", null);
+                String customName = readString(obj, "name", null);
+                if (key == null || sourceItemId == null || baseName == null || customName == null) {
+                    continue;
+                }
+                int color = 0xFFFFFF;
+                if (obj.has("color")) {
+                    try {
+                        color = obj.get("color").getAsInt() & 0xFFFFFF;
+                    } catch (Exception ignored) {
+                        color = 0xFFFFFF;
+                    }
+                }
+                ITEM_NAME_OVERRIDES.put(key, new ItemNameOverrideMapping(sourceItemId, baseName, customName, color));
             }
         }
         if (root.has("replacements")) {
@@ -991,6 +1532,10 @@ public final class FmeManager {
                     if (source != null) {
                         POSITION_CUSTOM_TEXTURE_SOURCES.put(pos, source);
                     }
+                    Block soundSource = parseBlock(obj, "soundSource");
+                    if (soundSource != null) {
+                        POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.put(pos, soundSource);
+                    }
                     POSITION_ROTATIONS.put(pos, parseRotationFromObject(obj));
                 }
             } else if (customEl.isJsonObject()) {
@@ -1003,6 +1548,7 @@ public final class FmeManager {
                     JsonElement value = entry.getValue();
                     String file = null;
                     Block source = null;
+                    Block soundSource = null;
                     int rotation = 0;
                     if (value != null && value.isJsonPrimitive()) {
                         file = value.getAsString();
@@ -1010,6 +1556,7 @@ public final class FmeManager {
                         JsonObject valueObj = value.getAsJsonObject();
                         file = parseCustomTextureFile(valueObj);
                         source = parseBlockFromObject(valueObj);
+                        soundSource = parseBlock(valueObj, "soundSource");
                         rotation = parseRotationFromObject(valueObj);
                     }
                     if (file == null || file.isBlank()) {
@@ -1018,6 +1565,9 @@ public final class FmeManager {
                     POSITION_CUSTOM_TEXTURES.put(pos, file);
                     if (source != null) {
                         POSITION_CUSTOM_TEXTURE_SOURCES.put(pos, source);
+                    }
+                    if (soundSource != null) {
+                        POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.put(pos, soundSource);
                     }
                     POSITION_ROTATIONS.put(pos, rotation);
                 }
@@ -1082,35 +1632,24 @@ public final class FmeManager {
                 POSITION_ROTATIONS.put(pos.asLong(), 0);
                 loadedLegacy = true;
             }
-            if (loadedLegacy) {
-                enabled = true;
-                editMode = false;
-            }
         }
         if (POSITION_REPLACEMENTS.isEmpty() && POSITION_CUSTOM_TEXTURES.isEmpty()) {
             loadedFloors = loadFloorsConfig(root);
-            if (loadedFloors) {
-                enabled = true;
-                editMode = false;
-            }
         }
         int totalEntries = POSITION_REPLACEMENTS.size() + POSITION_CUSTOM_TEXTURES.size();
         skipRemapCacheClear = loadedLegacy || loadedFloors || totalEntries >= 5000;
-        autoSaveEnabled = !skipRemapCacheClear;
+        autoSaveEnabled = true;
         if (loadedLegacy) {
-            sendClientMessage("Loaded legacy config. Auto-save disabled to avoid freezes. Use /fme config save <name>.");
+            sendClientMessage("Loaded legacy config. Auto-save remains enabled.");
         } else if (loadedFloors) {
-            sendClientMessage("Loaded floors config. Auto-save disabled to avoid freezes. Use /fme config save <name>.");
-        } else if (!autoSaveEnabled) {
-            sendClientMessage("Large config loaded (" + totalEntries + " entries). Auto-save disabled to avoid freezes.");
+            sendClientMessage("Loaded floors config. Auto-save remains enabled.");
+        } else if (totalEntries >= 5000) {
+            sendClientMessage("Large config loaded (" + totalEntries + " entries). Auto-save remains enabled.");
         }
         return true;
     }
 
     private static void save() {
-        if (!autoSaveEnabled) {
-            return;
-        }
         saveToPath(currentSavePath);
     }
 
@@ -1126,19 +1665,35 @@ public final class FmeManager {
         batching = false;
         if (batchChanged) {
             maybeClearRemapCache();
-            save();
+            scheduleSave();
             refreshWorld(null);
         }
     }
 
     private static void markChanged(BlockPos pos) {
+        bumpRenderDataVersion();
         if (batching) {
             batchChanged = true;
             return;
         }
         maybeClearRemapCache();
-        save();
+        scheduleSave();
         refreshWorld(pos);
+    }
+
+    private static void scheduleSave() {
+        pendingSave = true;
+        saveInTicks = SAVE_DEBOUNCE_TICKS;
+    }
+
+    private static void flushPendingSave() {
+        if (!pendingSave) {
+            saveInTicks = -1;
+            return;
+        }
+        pendingSave = false;
+        saveInTicks = -1;
+        save();
     }
 
     private static boolean saveToPath(Path path) {
@@ -1157,8 +1712,6 @@ public final class FmeManager {
 
     private static JsonObject buildConfigJson() {
         JsonObject root = new JsonObject();
-        root.addProperty("enabled", enabled);
-        root.addProperty("editMode", editMode);
         root.addProperty("theme", getTheme().name());
         if (customThemeActive && customThemeName != null && !customThemeName.isBlank()) {
             root.addProperty("customTheme", customThemeName);
@@ -1170,6 +1723,20 @@ public final class FmeManager {
         }
         root.addProperty("selectedRotation", selectedRotation);
         root.addProperty("blockBrightness", guiBlockBrightness);
+        root.addProperty("itemFirstPersonX", itemFirstPersonX);
+        root.addProperty("itemFirstPersonY", itemFirstPersonY);
+        root.addProperty("itemFirstPersonZ", itemFirstPersonZ);
+        root.addProperty("itemFirstPersonRotX", itemFirstPersonRotX);
+        root.addProperty("itemFirstPersonRotY", itemFirstPersonRotY);
+        root.addProperty("itemFirstPersonRotZ", itemFirstPersonRotZ);
+        root.addProperty("itemFirstPersonScale", itemFirstPersonScale);
+        root.addProperty("itemThirdPersonX", itemThirdPersonX);
+        root.addProperty("itemThirdPersonY", itemThirdPersonY);
+        root.addProperty("itemThirdPersonZ", itemThirdPersonZ);
+        root.addProperty("itemThirdPersonRotX", itemThirdPersonRotX);
+        root.addProperty("itemThirdPersonRotY", itemThirdPersonRotY);
+        root.addProperty("itemThirdPersonRotZ", itemThirdPersonRotZ);
+        root.addProperty("itemThirdPersonScale", itemThirdPersonScale);
         root.addProperty("offsetX", offsetX);
         root.addProperty("offsetY", offsetY);
         root.addProperty("offsetZ", offsetZ);
@@ -1185,6 +1752,42 @@ public final class FmeManager {
             customFavorites.add(name);
         }
         root.add("favoriteCustomTextures", customFavorites);
+
+        JsonArray itemAppearances = new JsonArray();
+        for (Map.Entry<String, ItemAppearanceMapping> entry : ITEM_APPEARANCE_MAPPINGS.entrySet()) {
+            ItemAppearanceMapping mapping = entry.getValue();
+            if (mapping == null || mapping.targetType == null || mapping.targetValue == null || mapping.targetValue.isBlank()) {
+                continue;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("key", entry.getKey());
+            if (mapping.sourceItemId != null && !mapping.sourceItemId.isBlank()) {
+                o.addProperty("sourceItem", mapping.sourceItemId);
+            }
+            if (mapping.baseName != null && !mapping.baseName.isBlank()) {
+                o.addProperty("baseName", mapping.baseName);
+            }
+            o.addProperty("targetType", mapping.targetType.name());
+            o.addProperty("target", mapping.targetValue);
+            itemAppearances.add(o);
+        }
+        root.add("itemAppearances", itemAppearances);
+
+        JsonArray itemNameOverrides = new JsonArray();
+        for (Map.Entry<String, ItemNameOverrideMapping> entry : ITEM_NAME_OVERRIDES.entrySet()) {
+            ItemNameOverrideMapping mapping = entry.getValue();
+            if (mapping == null || mapping.sourceItemId == null || mapping.baseName == null || mapping.customName == null) {
+                continue;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("key", entry.getKey());
+            o.addProperty("sourceItem", mapping.sourceItemId);
+            o.addProperty("baseName", mapping.baseName);
+            o.addProperty("name", mapping.customName);
+            o.addProperty("color", mapping.color & 0xFFFFFF);
+            itemNameOverrides.add(o);
+        }
+        root.add("itemNameOverrides", itemNameOverrides);
 
         JsonArray replacements = new JsonArray();
         for (Map.Entry<Long, Block> entry : POSITION_REPLACEMENTS.entrySet()) {
@@ -1204,6 +1807,10 @@ public final class FmeManager {
             Block source = POSITION_CUSTOM_TEXTURE_SOURCES.get(entry.getKey());
             if (source != null) {
                 o.addProperty("source", Registries.BLOCK.getId(source).toString());
+            }
+            Block soundSource = POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.get(entry.getKey());
+            if (soundSource != null) {
+                o.addProperty("soundSource", Registries.BLOCK.getId(soundSource).toString());
             }
             o.addProperty("rotation", POSITION_ROTATIONS.getOrDefault(entry.getKey(), 0));
             customTextures.add(o);
@@ -1311,15 +1918,21 @@ public final class FmeManager {
         POSITION_REPLACEMENTS.clear();
         POSITION_CUSTOM_TEXTURES.clear();
         POSITION_CUSTOM_TEXTURE_SOURCES.clear();
+        POSITION_CUSTOM_TEXTURE_SOUND_SOURCES.clear();
         POSITION_ROTATIONS.clear();
         POSITION_STATE_OVERRIDES.clear();
+        ITEM_APPEARANCE_MAPPINGS.clear();
+        ITEM_NAME_OVERRIDES.clear();
         AIR_GHOST_POSITIONS.clear();
         FAVORITES.clear();
         CUSTOM_TEXTURE_FAVORITES.clear();
         clearRemapCache();
+        bumpRenderDataVersion();
+        pendingItemEditKey = null;
+        pendingItemEditStack = ItemStack.EMPTY;
+        pendingItemNameStack = ItemStack.EMPTY;
+        pendingItemNameSlot = -1;
         if (resetDefaults) {
-            enabled = false;
-            editMode = false;
             selectedSource = net.minecraft.block.Blocks.STONE;
             selectedSourceType = SelectedSourceType.BLOCK;
             selectedCustomTexture = null;
@@ -1336,6 +1949,20 @@ public final class FmeManager {
             customThemeActive = false;
             customThemeName = null;
             customTheme = null;
+            itemFirstPersonX = 0.72f;
+            itemFirstPersonY = -0.34f;
+            itemFirstPersonZ = -0.18f;
+            itemFirstPersonRotX = -64.0f;
+            itemFirstPersonRotY = 32.0f;
+            itemFirstPersonRotZ = 46.0f;
+            itemFirstPersonScale = 1.18f;
+            itemThirdPersonX = 0.02f;
+            itemThirdPersonY = 0.14f;
+            itemThirdPersonZ = 0.0f;
+            itemThirdPersonRotX = -70.0f;
+            itemThirdPersonRotY = 12.0f;
+            itemThirdPersonRotZ = 52.0f;
+            itemThirdPersonScale = 1.1f;
             guiScale = 1.5f;
             guiBlockBrightness = 2.0f;
             autoSaveEnabled = true;
@@ -1344,6 +1971,7 @@ public final class FmeManager {
             offsetX = 0;
             offsetY = 0;
             offsetZ = 0;
+            loadSettingsState();
         }
     }
 
@@ -1447,8 +2075,7 @@ public final class FmeManager {
             JsonObject root = readStateRoot();
             root.addProperty("theme", theme.name());
             root.remove("customTheme");
-            Files.createDirectories(STATE_PATH.getParent());
-            Files.writeString(STATE_PATH, root.toString(), StandardCharsets.UTF_8);
+            writeStateRoot(root);
         } catch (IOException ignored) {
         }
     }
@@ -1460,8 +2087,25 @@ public final class FmeManager {
         try {
             JsonObject root = readStateRoot();
             root.addProperty("customTheme", name);
-            Files.createDirectories(STATE_PATH.getParent());
-            Files.writeString(STATE_PATH, root.toString(), StandardCharsets.UTF_8);
+            writeStateRoot(root);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static void recordEnabledState(boolean value) {
+        try {
+            JsonObject root = readStateRoot();
+            root.addProperty("enabled", value);
+            writeStateRoot(root);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static void recordEditModeState(boolean value) {
+        try {
+            JsonObject root = readStateRoot();
+            root.addProperty("editMode", value);
+            writeStateRoot(root);
         } catch (IOException ignored) {
         }
     }
@@ -1498,6 +2142,24 @@ public final class FmeManager {
         }
     }
 
+    private static void loadSettingsState() {
+        enabled = readBooleanFromState("enabled", false);
+        editMode = readBooleanFromState("editMode", false);
+        layoutPreset = readLayoutFromState();
+    }
+
+    private static boolean readBooleanFromState(String key, boolean fallback) {
+        try {
+            JsonObject root = readStateRoot();
+            if (!root.has(key)) {
+                return fallback;
+            }
+            return root.get(key).getAsBoolean();
+        } catch (Throwable ignored) {
+            return fallback;
+        }
+    }
+
     private static JsonObject readStateRoot() {
         if (!Files.exists(STATE_PATH)) {
             return new JsonObject();
@@ -1507,6 +2169,39 @@ public final class FmeManager {
             return JsonParser.parseString(raw).getAsJsonObject();
         } catch (Throwable ignored) {
             return new JsonObject();
+        }
+    }
+
+    private static void writeStateRoot(JsonObject root) throws IOException {
+        Files.createDirectories(STATE_PATH.getParent());
+        Files.writeString(STATE_PATH, root.toString(), StandardCharsets.UTF_8);
+    }
+
+    private static void recordLayoutState(LayoutPreset preset) {
+        if (preset == null) {
+            return;
+        }
+        try {
+            JsonObject root = readStateRoot();
+            root.addProperty("layoutPreset", preset.name());
+            writeStateRoot(root);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static LayoutPreset readLayoutFromState() {
+        try {
+            JsonObject root = readStateRoot();
+            if (!root.has("layoutPreset")) {
+                return LayoutPreset.BLOOM;
+            }
+            String value = root.get("layoutPreset").getAsString();
+            if (value == null || value.isBlank()) {
+                return LayoutPreset.BLOOM;
+            }
+            return LayoutPreset.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (Throwable ignored) {
+            return LayoutPreset.BLOOM;
         }
     }
 
@@ -1676,6 +2371,13 @@ public final class FmeManager {
             return parseBlockFromString(obj.get("name").getAsString());
         }
         return null;
+    }
+
+    private static Block parseBlock(JsonObject obj, String key) {
+        if (obj == null || key == null || key.isBlank() || !obj.has(key)) {
+            return null;
+        }
+        return parseBlockFromString(obj.get(key).getAsString());
     }
 
     private static Block parseBlockFromString(String raw) {
@@ -2088,6 +2790,10 @@ public final class FmeManager {
         REMAP_STATE_CACHE.clear();
     }
 
+    private static void bumpRenderDataVersion() {
+        renderDataVersion++;
+    }
+
     private static <T extends Comparable<T>> BlockState copyProperty(
         BlockState into,
         BlockState from,
@@ -2106,7 +2812,47 @@ public final class FmeManager {
 
     public enum ScreenMode {
         DEFAULT,
-        GUI_SETTINGS
+        GUI_SETTINGS,
+        ITEM,
+        ITEM_NAME
+    }
+
+    public enum ItemAppearanceTargetType {
+        BLOCK,
+        ITEM,
+        CUSTOM_TEXTURE
+    }
+
+    public static final class ItemAppearanceMapping {
+        public final String sourceItemId;
+        public final String baseName;
+        public final ItemAppearanceTargetType targetType;
+        public final String targetValue;
+
+        public ItemAppearanceMapping(String sourceItemId, String baseName, ItemAppearanceTargetType targetType, String targetValue) {
+            this.sourceItemId = sourceItemId;
+            this.baseName = baseName;
+            this.targetType = targetType;
+            this.targetValue = targetValue;
+        }
+    }
+
+    public static final class ItemNameOverrideMapping {
+        public final String sourceItemId;
+        public final String baseName;
+        public final String customName;
+        public final int color;
+
+        public ItemNameOverrideMapping(String sourceItemId, String baseName, String customName, int color) {
+            this.sourceItemId = sourceItemId;
+            this.baseName = baseName;
+            this.customName = customName;
+            this.color = color & 0xFFFFFF;
+        }
+
+        public Text toText() {
+            return Text.literal(customName).setStyle(Style.EMPTY.withItalic(false).withColor(color));
+        }
     }
 
     public enum Theme {
@@ -2127,7 +2873,16 @@ public final class FmeManager {
         FEMBOY,
         ARGON,
         MOSS,
-        HAZEL
+        HAZEL,
+        BLOSSOM
+    }
+
+    public enum LayoutPreset {
+        BLOOM,
+        TOPAZ,
+        OBSIDIAN,
+        SLATE,
+        ALPINE
     }
 
     public enum ThemeAnimation {
@@ -2323,6 +3078,13 @@ public final class FmeManager {
             && selectionBoxColor == 0x6677A1D3) {
             return Theme.HAZEL;
         }
+        if (guiPanelColor == 0xFFF2E7FA
+            && guiBorderColor == 0xFF8C6FB2
+            && guiTextColor == 0xFF452B5F
+            && guiAccentTextColor == 0xFF6E9F58
+            && selectionBoxColor == 0x66B99AE0) {
+            return Theme.BLOSSOM;
+        }
         return Theme.BLUE;
     }
 
@@ -2476,7 +3238,211 @@ public final class FmeManager {
                 guiAccentTextColor = 0xFFE684AE;
                 selectionBoxColor = 0x6677A1D3;
             }
+            case BLOSSOM -> {
+                guiPanelColor = 0xFFF2E7FA;
+                guiBorderColor = 0xFF8C6FB2;
+                guiTextColor = 0xFF452B5F;
+                guiAccentTextColor = 0xFF6E9F58;
+                selectionBoxColor = 0x66B99AE0;
+                tabAnimation = ThemeAnimation.GLOW;
+                selectionAnimation = ThemeAnimation.FADE;
+                panelCornerRadius = 18.0f;
+                elementCornerRadius = 12.0f;
+            }
         }
+    }
+
+    public static LayoutPreset getLayoutPreset() {
+        return layoutPreset;
+    }
+
+    public static float getItemFirstPersonX() {
+        return itemFirstPersonX;
+    }
+
+    public static void setItemFirstPersonX(float value) {
+        itemFirstPersonX = value;
+        save();
+    }
+
+    public static float getItemFirstPersonY() {
+        return itemFirstPersonY;
+    }
+
+    public static void setItemFirstPersonY(float value) {
+        itemFirstPersonY = value;
+        save();
+    }
+
+    public static float getItemFirstPersonZ() {
+        return itemFirstPersonZ;
+    }
+
+    public static void setItemFirstPersonZ(float value) {
+        itemFirstPersonZ = value;
+        save();
+    }
+
+    public static float getItemFirstPersonRotX() {
+        return itemFirstPersonRotX;
+    }
+
+    public static void setItemFirstPersonRotX(float value) {
+        itemFirstPersonRotX = value;
+        save();
+    }
+
+    public static float getItemFirstPersonRotY() {
+        return itemFirstPersonRotY;
+    }
+
+    public static void setItemFirstPersonRotY(float value) {
+        itemFirstPersonRotY = value;
+        save();
+    }
+
+    public static float getItemFirstPersonRotZ() {
+        return itemFirstPersonRotZ;
+    }
+
+    public static void setItemFirstPersonRotZ(float value) {
+        itemFirstPersonRotZ = value;
+        save();
+    }
+
+    public static float getItemFirstPersonScale() {
+        return itemFirstPersonScale;
+    }
+
+    public static void setItemFirstPersonScale(float value) {
+        itemFirstPersonScale = value;
+        save();
+    }
+
+    public static float getItemThirdPersonX() {
+        return itemThirdPersonX;
+    }
+
+    public static void setItemThirdPersonX(float value) {
+        itemThirdPersonX = value;
+        save();
+    }
+
+    public static float getItemThirdPersonY() {
+        return itemThirdPersonY;
+    }
+
+    public static void setItemThirdPersonY(float value) {
+        itemThirdPersonY = value;
+        save();
+    }
+
+    public static float getItemThirdPersonZ() {
+        return itemThirdPersonZ;
+    }
+
+    public static void setItemThirdPersonZ(float value) {
+        itemThirdPersonZ = value;
+        save();
+    }
+
+    public static float getItemThirdPersonRotX() {
+        return itemThirdPersonRotX;
+    }
+
+    public static void setItemThirdPersonRotX(float value) {
+        itemThirdPersonRotX = value;
+        save();
+    }
+
+    public static float getItemThirdPersonRotY() {
+        return itemThirdPersonRotY;
+    }
+
+    public static void setItemThirdPersonRotY(float value) {
+        itemThirdPersonRotY = value;
+        save();
+    }
+
+    public static float getItemThirdPersonRotZ() {
+        return itemThirdPersonRotZ;
+    }
+
+    public static void setItemThirdPersonRotZ(float value) {
+        itemThirdPersonRotZ = value;
+        save();
+    }
+
+    public static float getItemThirdPersonScale() {
+        return itemThirdPersonScale;
+    }
+
+    public static void setItemThirdPersonScale(float value) {
+        itemThirdPersonScale = value;
+        save();
+    }
+
+    public static void resetItemTransformSettings() {
+        itemFirstPersonX = 0.0f;
+        itemFirstPersonY = 0.0f;
+        itemFirstPersonZ = 0.0f;
+        itemFirstPersonRotX = 0.0f;
+        itemFirstPersonRotY = 0.0f;
+        itemFirstPersonRotZ = 0.0f;
+        itemFirstPersonScale = 1.0f;
+        itemThirdPersonX = 0.0f;
+        itemThirdPersonY = 0.0f;
+        itemThirdPersonZ = 0.0f;
+        itemThirdPersonRotX = 0.0f;
+        itemThirdPersonRotY = 0.0f;
+        itemThirdPersonRotZ = 0.0f;
+        itemThirdPersonScale = 1.0f;
+        save();
+    }
+
+    private static void migrateLegacyItemTransformDefaultsIfNeeded() {
+        if (!isLegacyDefaultItemTransform(itemFirstPersonX, 0.72f)
+            || !isLegacyDefaultItemTransform(itemFirstPersonY, -0.34f)
+            || !isLegacyDefaultItemTransform(itemFirstPersonZ, -0.18f)
+            || !isLegacyDefaultItemTransform(itemFirstPersonRotX, -64.0f)
+            || !isLegacyDefaultItemTransform(itemFirstPersonRotY, 32.0f)
+            || !isLegacyDefaultItemTransform(itemFirstPersonRotZ, 46.0f)
+            || !isLegacyDefaultItemTransform(itemFirstPersonScale, 1.18f)
+            || !isLegacyDefaultItemTransform(itemThirdPersonX, 0.02f)
+            || !isLegacyDefaultItemTransform(itemThirdPersonY, 0.14f)
+            || !isLegacyDefaultItemTransform(itemThirdPersonZ, 0.0f)
+            || !isLegacyDefaultItemTransform(itemThirdPersonRotX, -70.0f)
+            || !isLegacyDefaultItemTransform(itemThirdPersonRotY, 12.0f)
+            || !isLegacyDefaultItemTransform(itemThirdPersonRotZ, 52.0f)
+            || !isLegacyDefaultItemTransform(itemThirdPersonScale, 1.1f)) {
+            return;
+        }
+        itemFirstPersonX = 0.0f;
+        itemFirstPersonY = 0.0f;
+        itemFirstPersonZ = 0.0f;
+        itemFirstPersonRotX = 0.0f;
+        itemFirstPersonRotY = 0.0f;
+        itemFirstPersonRotZ = 0.0f;
+        itemFirstPersonScale = 1.0f;
+        itemThirdPersonX = 0.0f;
+        itemThirdPersonY = 0.0f;
+        itemThirdPersonZ = 0.0f;
+        itemThirdPersonRotX = 0.0f;
+        itemThirdPersonRotY = 0.0f;
+        itemThirdPersonRotZ = 0.0f;
+        itemThirdPersonScale = 1.0f;
+    }
+
+    private static boolean isLegacyDefaultItemTransform(float value, float legacyDefault) {
+        return Math.abs(value - legacyDefault) < 0.0001f;
+    }
+
+    public static void setLayoutPreset(LayoutPreset preset) {
+        if (preset == null || preset == layoutPreset) {
+            return;
+        }
+        layoutPreset = preset;
+        recordLayoutState(preset);
     }
 
     public static float getGuiScale() {

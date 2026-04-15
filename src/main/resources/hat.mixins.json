@@ -6,7 +6,12 @@
   "client": [
     "BlockRenderManagerAccessor",
     "BlockRenderManagerMixin",
+    "ClientPlayerInteractionManagerMixin",
+    "ClientWorldMixin",
     "ChunkRendererRegionMixin",
+    "ItemModelManagerMixin",
+    "ItemRenderStateMixin",
+    "ItemStackMixin",
     "SodiumLevelSliceMixin",
     "SodiumBlockRendererMixin"
   ],

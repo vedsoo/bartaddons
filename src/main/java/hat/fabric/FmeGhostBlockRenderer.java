@@ -19,27 +19,30 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.math.random.Random;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.ArrayList;
 
 public final class FmeGhostBlockRenderer {
-    private static final double MAX_DISTANCE_SQ = 128.0 * 128.0;
-    private static final long REBUILD_TICKS = 20;
-    private static final int MAX_RENDER_PER_FRAME = 5000;
-    private static final double REBUILD_MOVE_SQ = 4.0;
-    private static final int MAX_RENDER_BLOCKS = 20000;
+    private static final double MAX_DISTANCE_SQ = 72.0 * 72.0;
+    private static final int CHUNK_RADIUS = 5;
+    private static final int MAX_RENDER_PER_FRAME = 1400;
+    private static final int MAX_CANDIDATES = 4000;
     private static final ThreadLocal<BlockPos.Mutable> MUTABLE_POS =
         ThreadLocal.withInitial(BlockPos.Mutable::new);
     private static final ThreadLocal<Random> RENDER_RANDOM =
         ThreadLocal.withInitial(Random::create);
     private static final ThreadLocal<ArrayList<BlockModelPart>> RENDER_PARTS =
         ThreadLocal.withInitial(ArrayList::new);
-    private static final java.util.ArrayList<Long> CACHED_POSITIONS = new java.util.ArrayList<>();
-    private static int lastCamBlockX = Integer.MIN_VALUE;
-    private static int lastCamBlockY = Integer.MIN_VALUE;
-    private static int lastCamBlockZ = Integer.MIN_VALUE;
-    private static long lastRebuildTick = -1;
-    private static int renderCursor = 0;
+    private static final ArrayList<Long> VISIBLE_POSITIONS = new ArrayList<>();
+    private static final ArrayList<DistanceEntry> DISTANCE_BUFFER = new ArrayList<>();
+    private static final Map<Long, ArrayList<Long>> POSITIONS_BY_CHUNK = new HashMap<>();
+    private static long indexedVersion = Long.MIN_VALUE;
+    private static int lastCamChunkX = Integer.MIN_VALUE;
+    private static int lastCamChunkY = Integer.MIN_VALUE;
+    private static int lastCamChunkZ = Integer.MIN_VALUE;
 
     private FmeGhostBlockRenderer() {
     }
@@ -63,40 +66,21 @@ public final class FmeGhostBlockRenderer {
         BlockModels models = accessor.hat$getModels();
         BlockModelRenderer modelRenderer = accessor.hat$getBlockModelRenderer();
         Vec3d camPos = client.gameRenderer.getCamera().getPos();
-        int camX = (int) Math.floor(camPos.x);
-        int camY = (int) Math.floor(camPos.y);
-        int camZ = (int) Math.floor(camPos.z);
-        long now = client.world.getTime();
         Set<Long> ghostPositions = FmeManager.airGhostPositionsView();
-        long rebuildInterval = rebuildIntervalFor(ghostPositions.size());
-        if (shouldRebuildCache(camX, camY, camZ, now, rebuildInterval)) {
-            rebuildCache(ghostPositions, camPos);
-            lastCamBlockX = camX;
-            lastCamBlockY = camY;
-            lastCamBlockZ = camZ;
-            lastRebuildTick = now;
-        }
-        if (CACHED_POSITIONS.isEmpty()) {
+        if (ghostPositions.isEmpty()) {
             return;
         }
+        updateChunkIndex(ghostPositions);
+        rebuildVisibleCacheIfNeeded(camPos);
 
+        if (VISIBLE_POSITIONS.isEmpty()) {
+            return;
+        }
         BlockPos.Mutable pos = MUTABLE_POS.get();
-        int total = CACHED_POSITIONS.size();
-        int toRender = Math.min(MAX_RENDER_PER_FRAME, total);
-        int start = renderCursor % total;
+        int toRender = Math.min(MAX_RENDER_PER_FRAME, VISIBLE_POSITIONS.size());
         for (int i = 0; i < toRender; i++) {
-            int idx = start + i;
-            if (idx >= total) {
-                idx -= total;
-            }
-            Long key = CACHED_POSITIONS.get(idx);
+            Long key = VISIBLE_POSITIONS.get(i);
             pos.set(key);
-            double dx = pos.getX() + 0.5 - camPos.x;
-            double dy = pos.getY() + 0.5 - camPos.y;
-            double dz = pos.getZ() + 0.5 - camPos.z;
-            if ((dx * dx + dy * dy + dz * dz) > MAX_DISTANCE_SQ) {
-                continue;
-            }
             BlockState worldState = client.world.getBlockState(pos);
             if (!worldState.isAir()) {
                 continue;
@@ -119,56 +103,83 @@ public final class FmeGhostBlockRenderer {
             modelRenderer.render(client.world, parts, mapped, pos, matrices, vc, true, OverlayTexture.DEFAULT_UV);
             matrices.pop();
         }
-        renderCursor = (start + toRender) % total;
     }
 
-    private static boolean shouldRebuildCache(int camX, int camY, int camZ, long now, long rebuildInterval) {
-        if (lastRebuildTick < 0) {
-            return true;
-        }
-        if (now - lastRebuildTick >= rebuildInterval) {
-            return true;
-        }
-        int dx = camX - lastCamBlockX;
-        int dy = camY - lastCamBlockY;
-        int dz = camZ - lastCamBlockZ;
-        return (dx * dx + dy * dy + dz * dz) >= REBUILD_MOVE_SQ;
-    }
-
-    private static long rebuildIntervalFor(int size) {
-        if (size >= 200_000) {
-            return 120;
-        }
-        if (size >= 100_000) {
-            return 80;
-        }
-        if (size >= 50_000) {
-            return 60;
-        }
-        if (size >= 20_000) {
-            return 40;
-        }
-        return REBUILD_TICKS;
-    }
-
-    private static void rebuildCache(Set<Long> ghostPositions, Vec3d camPos) {
-        CACHED_POSITIONS.clear();
-        if (ghostPositions.isEmpty()) {
+    private static void updateChunkIndex(Set<Long> ghostPositions) {
+        long version = FmeManager.renderDataVersion();
+        if (indexedVersion == version) {
             return;
         }
+
+        POSITIONS_BY_CHUNK.clear();
         BlockPos.Mutable pos = MUTABLE_POS.get();
         for (Long key : ghostPositions) {
             pos.set(key);
-            double dx = pos.getX() + 0.5 - camPos.x;
-            double dy = pos.getY() + 0.5 - camPos.y;
-            double dz = pos.getZ() + 0.5 - camPos.z;
-            if ((dx * dx + dy * dy + dz * dz) > MAX_DISTANCE_SQ) {
-                continue;
-            }
-            CACHED_POSITIONS.add(key);
-            if (CACHED_POSITIONS.size() >= MAX_RENDER_BLOCKS) {
-                break;
+            long chunkKey = chunkKey(
+                chunkCoord(pos.getX()),
+                chunkCoord(pos.getY()),
+                chunkCoord(pos.getZ())
+            );
+            POSITIONS_BY_CHUNK.computeIfAbsent(chunkKey, ignored -> new ArrayList<>()).add(key);
+        }
+        indexedVersion = version;
+        lastCamChunkX = Integer.MIN_VALUE;
+        lastCamChunkY = Integer.MIN_VALUE;
+        lastCamChunkZ = Integer.MIN_VALUE;
+    }
+
+    private static void rebuildVisibleCacheIfNeeded(Vec3d camPos) {
+        int camChunkX = chunkCoord((int) Math.floor(camPos.x));
+        int camChunkY = chunkCoord((int) Math.floor(camPos.y));
+        int camChunkZ = chunkCoord((int) Math.floor(camPos.z));
+        if (camChunkX == lastCamChunkX && camChunkY == lastCamChunkY && camChunkZ == lastCamChunkZ) {
+            return;
+        }
+
+        VISIBLE_POSITIONS.clear();
+        DISTANCE_BUFFER.clear();
+        BlockPos.Mutable pos = MUTABLE_POS.get();
+        for (int x = camChunkX - CHUNK_RADIUS; x <= camChunkX + CHUNK_RADIUS; x++) {
+            for (int y = camChunkY - 1; y <= camChunkY + 1; y++) {
+                for (int z = camChunkZ - CHUNK_RADIUS; z <= camChunkZ + CHUNK_RADIUS; z++) {
+                    List<Long> positions = POSITIONS_BY_CHUNK.get(chunkKey(x, y, z));
+                    if (positions == null) {
+                        continue;
+                    }
+                    for (Long key : positions) {
+                        pos.set(key);
+                        double dx = pos.getX() + 0.5 - camPos.x;
+                        double dy = pos.getY() + 0.5 - camPos.y;
+                        double dz = pos.getZ() + 0.5 - camPos.z;
+                        double distanceSq = dx * dx + dy * dy + dz * dz;
+                        if (distanceSq > MAX_DISTANCE_SQ) {
+                            continue;
+                        }
+                        DISTANCE_BUFFER.add(new DistanceEntry(key, distanceSq));
+                    }
+                }
             }
         }
+        DISTANCE_BUFFER.sort((a, b) -> Double.compare(a.distanceSq, b.distanceSq));
+        int limit = Math.min(MAX_CANDIDATES, DISTANCE_BUFFER.size());
+        for (int i = 0; i < limit; i++) {
+            VISIBLE_POSITIONS.add(DISTANCE_BUFFER.get(i).key);
+        }
+        lastCamChunkX = camChunkX;
+        lastCamChunkY = camChunkY;
+        lastCamChunkZ = camChunkZ;
+    }
+
+    private static long chunkKey(int chunkX, int chunkY, int chunkZ) {
+        return (((long) chunkX) & 0x3FFFFFL) << 42
+            | ((((long) chunkY) & 0xFFFFFL) << 22)
+            | (((long) chunkZ) & 0x3FFFFFL);
+    }
+
+    private static int chunkCoord(int blockCoord) {
+        return blockCoord >> 4;
+    }
+
+    private record DistanceEntry(long key, double distanceSq) {
     }
 }
