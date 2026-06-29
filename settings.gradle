@@ -10,9 +10,3 @@ pluginManagement {
 }
 
 rootProject.name = "bart-addons"
-
-includeBuild("NVGRenderer") {
-    dependencySubstitution {
-        substitute module("com.github.noamm9:NvgRenderer") using project(":")
-    }
-}
